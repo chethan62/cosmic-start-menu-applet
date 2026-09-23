@@ -1,8 +1,11 @@
 //! Start Menu — a Windows 10-style Start menu for the COSMIC panel.
 
+// Modules are built bottom-up before the popup uses them; removed once it does.
+#![allow(dead_code)]
+
 mod app;
+mod apps;
 mod i18n;
-#[allow(dead_code)] // Used from Task 7 (session/launch) onward.
 mod process;
 
 fn main() -> cosmic::iced::Result {
