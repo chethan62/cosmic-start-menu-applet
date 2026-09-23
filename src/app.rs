@@ -3,7 +3,7 @@
 use cosmic::app::{Core, Task};
 use cosmic::iced::window::{self, Id};
 use cosmic::iced::{Length, Limits};
-use cosmic::widget::{column, container, row, text, Space};
+use cosmic::widget::{column, container, row, text};
 use cosmic::{Application, Element};
 
 use crate::apps::App as AppEntry;
@@ -34,6 +34,8 @@ pub enum Message {
     /// Everything read from disk when the popup opens, in one go.
     Loaded(Box<Loaded>),
     Launch(usize),
+    /// A tile, which knows its app by id rather than list position.
+    LaunchId(String),
     LetterGrid(bool),
     PowerMenu(bool),
     Power(Power),
@@ -214,6 +216,10 @@ impl Application for App {
                 let launch = Task::perform(crate::launch::app(app), |()| cosmic::action::none());
                 Task::batch([close, launch])
             }
+            Message::LaunchId(id) => match self.apps.iter().position(|a| a.id == id) {
+                Some(i) => self.update(Message::Launch(i)),
+                None => Task::none(),
+            },
             // The letter-jump grid arrives in a later change.
             Message::LetterGrid(_) => Task::none(),
             Message::PowerMenu(open) => {
@@ -266,7 +272,7 @@ impl Application for App {
         let columns = row::with_children(vec![
             ui::rail::view(self.power_open),
             ui::app_list::view(&self.apps, &self.usage_top, self.config.show_most_used),
-            Space::new().width(Length::Fill).into(),
+            ui::tiles::view(&self.config, &self.apps, spacing),
         ])
         .spacing(12)
         .height(Length::Fill);

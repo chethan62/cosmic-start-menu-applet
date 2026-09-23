@@ -8,6 +8,7 @@
 
 pub mod app_list;
 pub mod rail;
+pub mod tiles;
 
 use cosmic::iced::{Background, Border, Color};
 use cosmic::widget::button;
