@@ -34,6 +34,8 @@ pub struct App {
     pointer: Point,
     context: Option<Context>,
     edit: ui::tiles::Edit,
+    letter_grid: bool,
+    list_id: cosmic::widget::Id,
 }
 
 /// What a right-click menu is about.
@@ -86,6 +88,7 @@ pub enum Message {
     NewGroupWith(TileRef),
     RunAction(usize, usize),
     ToggleEdit,
+    JumpTo(char),
     /// A tile pressed in edit mode: pick it up, drop onto it, or put it back.
     TileClicked(TileRef),
     DropEnd(usize),
@@ -126,6 +129,7 @@ impl App {
         self.power_open = false;
         self.context = None;
         self.edit = ui::tiles::Edit::default();
+        self.letter_grid = false;
         match self.popup.take() {
             Some(id) => cosmic::iced::platform_specific::shell::commands::popup::destroy_popup(id),
             None => Task::none(),
@@ -193,6 +197,8 @@ impl Application for App {
                 pointer: Point::ORIGIN,
                 context: None,
                 edit: ui::tiles::Edit::default(),
+                letter_grid: false,
+                list_id: cosmic::widget::Id::new("start-menu-list"),
             },
             Task::none(),
         )
@@ -305,8 +311,35 @@ impl Application for App {
                 Some(i) => self.update(Message::Launch(i)),
                 None => Task::none(),
             },
-            // The letter-jump grid arrives in a later change.
-            Message::LetterGrid(_) => Task::none(),
+            Message::LetterGrid(open) => {
+                self.letter_grid = open;
+                Task::none()
+            }
+            Message::JumpTo(letter) => {
+                self.letter_grid = false;
+                let most_used = if self.config.show_most_used {
+                    self.usage_top
+                        .iter()
+                        .filter(|id| self.apps.iter().any(|a| &a.id == *id))
+                        .count()
+                } else {
+                    0
+                };
+                let y = ui::app_list::offset_of(
+                    &crate::apps::sections(&self.apps),
+                    most_used,
+                    &letter,
+                    ui::ROW_HEIGHT,
+                    ui::HEADER_HEIGHT,
+                );
+                cosmic::iced::widget::scrollable::scroll_to(
+                    self.list_id.clone(),
+                    cosmic::iced::widget::scrollable::AbsoluteOffset {
+                        x: None,
+                        y: Some(y),
+                    },
+                )
+            }
             Message::PowerMenu(open) => {
                 self.power_open = open;
                 Task::none()
@@ -507,7 +540,20 @@ impl Application for App {
             row::with_children(vec![
                 column::with_children(vec![
                     search.width(Length::Fixed(ui::LIST_WIDTH)).into(),
-                    ui::app_list::view(&self.apps, &self.usage_top, self.config.show_most_used),
+                    if self.letter_grid {
+                        let present: Vec<char> = crate::apps::sections(&self.apps)
+                            .into_iter()
+                            .map(|(c, _)| c)
+                            .collect();
+                        ui::app_list::letter_grid(&present)
+                    } else {
+                        ui::app_list::view(
+                            &self.apps,
+                            &self.usage_top,
+                            self.config.show_most_used,
+                            self.list_id.clone(),
+                        )
+                    },
                 ])
                 .spacing(spacing.section)
                 .into(),
