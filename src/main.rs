@@ -7,8 +7,10 @@ mod app;
 mod apps;
 mod config;
 mod i18n;
+mod launch;
 mod process;
 mod search;
+mod session;
 mod tile_layout;
 mod usage;
 
