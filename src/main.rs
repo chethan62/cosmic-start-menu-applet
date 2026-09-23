@@ -5,6 +5,7 @@
 
 mod app;
 mod apps;
+mod config;
 mod i18n;
 mod process;
 mod search;
