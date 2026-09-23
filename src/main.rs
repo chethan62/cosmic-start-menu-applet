@@ -9,6 +9,7 @@ mod config;
 mod i18n;
 mod process;
 mod search;
+mod usage;
 
 fn main() -> cosmic::iced::Result {
     // `RUST_LOG=debug` shows why an app was skipped or a file was unreadable.
