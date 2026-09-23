@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=Start Menu
+Comment=A Windows 10-style Start menu for the panel
+Type=Application
+Exec=cosmic-start-menu-applet
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Iced;start;menu;launcher;
+Icon=start-here-symbolic
+StartupNotify=true
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicHoverPopup=Auto
+X-OverflowPriority=10

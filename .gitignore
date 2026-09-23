@@ -5,3 +5,6 @@ build/
 context/sessions/
 *.log
 .DS_Store
+
+# Rust
+/target/

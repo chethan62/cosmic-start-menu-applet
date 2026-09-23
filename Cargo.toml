@@ -1,0 +1,45 @@
+[package]
+name = "cosmic-start-menu-applet"
+version = "0.1.0"
+edition = "2021"
+description = "A Windows 10-style Start menu for the COSMIC panel"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jjnuthuagen/cosmic-start-menu-applet"
+readme = "README.md"
+# CI builds on latest stable; this is the floor, not the target.
+rust-version = "1.85"
+
+[dependencies]
+# Same pin as cosmic-control-center-applet: libcosmic is pre-1.0 and its API
+# moves, so an unpinned git dependency breaks without warning.
+libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "ef490df50b0a05a21c494c3f75737581bf0b39d9", default-features = false, features = [
+    "applet",
+    "tokio",
+    "wayland",
+    "multi-window",
+    "winit",
+    # Desktop-entry parsing and launching, in a systemd scope like the stock
+    # launcher.
+    "desktop",
+    "desktop-systemd-scope",
+] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["time", "process", "rt", "fs"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+dirs = "6"
+fluent-bundle = "0.16"
+unic-langid = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+# Panel applets stay resident for the whole session, so favour a small, fast
+# binary over build speed.
+lto = "thin"
+opt-level = 3
+strip = true
+codegen-units = 1
