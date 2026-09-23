@@ -9,6 +9,7 @@ mod config;
 mod i18n;
 mod process;
 mod search;
+mod tile_layout;
 mod usage;
 
 fn main() -> cosmic::iced::Result {
