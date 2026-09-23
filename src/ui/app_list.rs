@@ -75,3 +75,25 @@ pub fn view<'a>(
         .height(Length::Fill)
         .into()
 }
+
+/// Search results, best first, with the keyboard selection highlighted.
+pub fn results_view<'a>(
+    list: &'a [App],
+    hits: &[usize],
+    selected: usize,
+    query: &str,
+) -> Element<'a, Message> {
+    if hits.is_empty() {
+        return container(text::body(fl!("no-results", query = query.trim())))
+            .padding([12, 10])
+            .into();
+    }
+    let rows = hits
+        .iter()
+        .enumerate()
+        .map(|(n, &i)| app_row(&list[i], i, n == selected))
+        .collect::<Vec<_>>();
+    scrollable(column::with_children(rows))
+        .height(Length::Fill)
+        .into()
+}

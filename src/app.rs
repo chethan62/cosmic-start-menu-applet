@@ -1,9 +1,10 @@
 //! The applet: a panel button and the Start menu popup it opens.
 
 use cosmic::app::{Core, Task};
+use cosmic::iced::keyboard::{key::Named, Key as KeyCode};
 use cosmic::iced::window::{self, Id};
-use cosmic::iced::{Length, Limits};
-use cosmic::widget::{column, container, row, text};
+use cosmic::iced::{Length, Limits, Subscription};
+use cosmic::widget::{column, container, row, text, text_input};
 use cosmic::{Application, Element};
 
 use crate::apps::App as AppEntry;
@@ -25,6 +26,19 @@ pub struct App {
     usage_top: Vec<String>,
     power_open: bool,
     error: Option<String>,
+    query: String,
+    /// Keyboard selection among search results.
+    selected: usize,
+    search_id: cosmic::widget::Id,
+}
+
+/// Keys the search handles itself. Enter comes from the input's own submit,
+/// so it is not listened for here and cannot fire twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    Up,
+    Down,
+    Escape,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +54,9 @@ pub enum Message {
     PowerMenu(bool),
     Power(Power),
     ShowError(String),
+    Query(String),
+    SearchKey(Key),
+    Submit,
     OpenFiles,
     OpenSettingsApp,
     OpenAccount,
@@ -114,6 +131,9 @@ impl Application for App {
                 usage_top: Vec::new(),
                 power_open: false,
                 error: None,
+                query: String::new(),
+                selected: 0,
+                search_id: cosmic::widget::Id::new("start-menu-search"),
             },
             Task::none(),
         )
@@ -135,6 +155,8 @@ impl Application for App {
                 }
                 self.power_open = false;
                 self.error = None;
+                self.query.clear();
+                self.selected = 0;
                 let id = window::Id::unique();
                 self.popup = Some(id);
                 let mut settings = self.core.applet.get_popup_settings(
@@ -167,6 +189,9 @@ impl Application for App {
                     },
                 );
 
+                // Focused straight away so typing searches, as in Windows.
+                let focus = text_input::focus(self.search_id.clone());
+
                 // libcosmic only blurs surfaces it tracks in `surface_views`,
                 // and a popup made with `get_popup` is not one of them, so the
                 // theme's frosted styling would give a translucent popup with
@@ -185,9 +210,9 @@ impl Application for App {
                             height: f32::MAX,
                         }]),
                     );
-                    Task::batch([popup, blur.discard(), load])
+                    Task::batch([popup, blur.discard(), load, focus])
                 } else {
-                    Task::batch([popup, load])
+                    Task::batch([popup, load, focus])
                 }
             }
             Message::PopupClosed(id) => {
@@ -237,6 +262,36 @@ impl Application for App {
                     ))),
                 })
             }
+            Message::Query(q) => {
+                self.query = q;
+                self.selected = 0;
+                Task::none()
+            }
+            Message::SearchKey(Key::Down) => {
+                let hits = crate::search::rank(&self.apps, &self.query).len();
+                self.selected = (self.selected + 1).min(hits.saturating_sub(1));
+                Task::none()
+            }
+            Message::SearchKey(Key::Up) => {
+                self.selected = self.selected.saturating_sub(1);
+                Task::none()
+            }
+            Message::SearchKey(Key::Escape) => {
+                if self.query.is_empty() {
+                    self.close_popup()
+                } else {
+                    self.query.clear();
+                    self.selected = 0;
+                    text_input::focus(self.search_id.clone())
+                }
+            }
+            Message::Submit => {
+                let hits = crate::search::rank(&self.apps, &self.query);
+                match hits.get(self.selected.min(hits.len().saturating_sub(1))) {
+                    Some(&i) => self.update(Message::Launch(i)),
+                    None => Task::none(),
+                }
+            }
             Message::ShowError(e) => {
                 self.error = Some(e);
                 Task::none()
@@ -259,6 +314,24 @@ impl Application for App {
         }
     }
 
+    fn subscription(&self) -> Subscription<Message> {
+        if self.popup.is_none() {
+            return Subscription::none();
+        }
+        cosmic::iced::event::listen_with(|event, _status, _id| match event {
+            cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
+                key: KeyCode::Named(named),
+                ..
+            }) => match named {
+                Named::ArrowUp => Some(Message::SearchKey(Key::Up)),
+                Named::ArrowDown => Some(Message::SearchKey(Key::Down)),
+                Named::Escape => Some(Message::SearchKey(Key::Escape)),
+                _ => None,
+            },
+            _ => None,
+        })
+    }
+
     fn view(&self) -> Element<'_, Message> {
         self.core
             .applet
@@ -269,13 +342,39 @@ impl Application for App {
 
     fn view_window(&self, _id: Id) -> Element<'_, Message> {
         let spacing = self.spacing();
-        let columns = row::with_children(vec![
-            ui::rail::view(self.power_open),
-            ui::app_list::view(&self.apps, &self.usage_top, self.config.show_most_used),
-            ui::tiles::view(&self.config, &self.apps, spacing),
-        ])
-        .spacing(12)
-        .height(Length::Fill);
+        let search = text_input::search_input(fl!("search-placeholder"), &self.query)
+            .id(self.search_id.clone())
+            .on_input(Message::Query)
+            .on_submit(|_| Message::Submit);
+
+        // While searching, results take the list and tile columns together.
+        let searching = !self.query.trim().is_empty();
+        let main: Element<'_, Message> = if searching {
+            let hits = crate::search::rank(&self.apps, &self.query);
+            let selected = self.selected.min(hits.len().saturating_sub(1));
+            column::with_children(vec![
+                search.into(),
+                ui::app_list::results_view(&self.apps, &hits, selected, &self.query),
+            ])
+            .spacing(spacing.section)
+            .width(Length::Fill)
+            .into()
+        } else {
+            row::with_children(vec![
+                column::with_children(vec![
+                    search.width(Length::Fixed(ui::LIST_WIDTH)).into(),
+                    ui::app_list::view(&self.apps, &self.usage_top, self.config.show_most_used),
+                ])
+                .spacing(spacing.section)
+                .into(),
+                ui::tiles::view(&self.config, &self.apps, spacing),
+            ])
+            .spacing(12)
+            .into()
+        };
+        let columns = row::with_children(vec![ui::rail::view(self.power_open), main])
+            .spacing(12)
+            .height(Length::Fill);
 
         let mut body = column::with_capacity(2).push(columns);
         if let Some(e) = &self.error {
