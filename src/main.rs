@@ -12,6 +12,7 @@ mod process;
 mod search;
 mod session;
 mod tile_layout;
+mod ui;
 mod usage;
 
 fn main() -> cosmic::iced::Result {

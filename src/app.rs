@@ -3,10 +3,14 @@
 use cosmic::app::{Core, Task};
 use cosmic::iced::window::{self, Id};
 use cosmic::iced::{Length, Limits};
-use cosmic::widget::{container, text};
+use cosmic::widget::{column, container, row, text, Space};
 use cosmic::{Application, Element};
 
+use crate::apps::App as AppEntry;
+use crate::config::Config;
 use crate::fl;
+use crate::session::Power;
+use crate::ui::{self, Spacing};
 
 /// Rail + list + a six-cell tile column, with padding. Fixed like Windows 10's
 /// menu; each column scrolls inside it.
@@ -16,12 +20,71 @@ pub const POPUP_HEIGHT: f32 = 600.0;
 pub struct App {
     core: Core,
     popup: Option<Id>,
+    config: Config,
+    apps: Vec<AppEntry>,
+    usage_top: Vec<String>,
+    power_open: bool,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
     TogglePopup,
     PopupClosed(Id),
+    /// Everything read from disk when the popup opens, in one go.
+    Loaded(Box<Loaded>),
+    Launch(usize),
+    LetterGrid(bool),
+    PowerMenu(bool),
+    Power(Power),
+    ShowError(String),
+    OpenFiles,
+    OpenSettingsApp,
+    OpenAccount,
+}
+
+#[derive(Debug, Clone)]
+pub struct Loaded {
+    pub apps: Vec<AppEntry>,
+    pub most_used: Vec<String>,
+    pub config: Config,
+}
+
+/// Read the app index, launch history and config. Blocking file I/O, so it
+/// runs on the blocking pool, never in `update`.
+fn load() -> Loaded {
+    let apps = crate::apps::load_all();
+    let ids: std::collections::HashSet<&str> = apps.iter().map(|a| a.id.as_str()).collect();
+    let most_used = crate::usage::Usage::path()
+        .map(|p| crate::usage::Usage::load_from(&p).top(5, &ids))
+        .unwrap_or_default();
+    let config = Config::load();
+    Loaded {
+        apps,
+        most_used,
+        config,
+    }
+}
+
+impl App {
+    fn close_popup(&mut self) -> Task<Message> {
+        self.power_open = false;
+        match self.popup.take() {
+            Some(id) => cosmic::iced::platform_specific::shell::commands::popup::destroy_popup(id),
+            None => Task::none(),
+        }
+    }
+
+    fn report(&mut self, result: Result<(), String>) {
+        if let Err(e) = result {
+            tracing::warn!("{e}");
+            self.error = Some(e);
+        }
+    }
+
+    fn spacing(&self) -> Spacing {
+        Spacing::from_theme(self.core.system_theme())
+    }
 }
 
 impl Application for App {
@@ -40,7 +103,18 @@ impl Application for App {
     }
 
     fn init(core: Core, _flags: ()) -> (Self, Task<Message>) {
-        (Self { core, popup: None }, Task::none())
+        (
+            Self {
+                core,
+                popup: None,
+                config: Config::default(),
+                apps: Vec::new(),
+                usage_top: Vec::new(),
+                power_open: false,
+                error: None,
+            },
+            Task::none(),
+        )
     }
 
     fn style(&self) -> Option<cosmic::iced::theme::Style> {
@@ -54,11 +128,11 @@ impl Application for App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::TogglePopup => {
-                if let Some(id) = self.popup.take() {
-                    return cosmic::iced::platform_specific::shell::commands::popup::destroy_popup(
-                        id,
-                    );
+                if self.popup.is_some() {
+                    return self.close_popup();
                 }
+                self.power_open = false;
+                self.error = None;
                 let id = window::Id::unique();
                 self.popup = Some(id);
                 let mut settings = self.core.applet.get_popup_settings(
@@ -75,6 +149,21 @@ impl Application for App {
                     .max_height(POPUP_HEIGHT);
                 let popup =
                     cosmic::iced::platform_specific::shell::commands::popup::get_popup(settings);
+
+                // Re-read apps, history and config on every open, off-thread:
+                // an app installed a minute ago shows up, and edits made in the
+                // Settings window apply, without a file watcher.
+                let load = Task::perform(
+                    async {
+                        tokio::task::spawn_blocking(load)
+                            .await
+                            .map_err(|e| e.to_string())
+                    },
+                    |r| match r {
+                        Ok(l) => cosmic::action::app(Message::Loaded(Box::new(l))),
+                        Err(e) => cosmic::action::app(Message::ShowError(e)),
+                    },
+                );
 
                 // libcosmic only blurs surfaces it tracks in `surface_views`,
                 // and a popup made with `get_popup` is not one of them, so the
@@ -94,16 +183,72 @@ impl Application for App {
                             height: f32::MAX,
                         }]),
                     );
-                    Task::batch([popup, blur.discard()])
+                    Task::batch([popup, blur.discard(), load])
                 } else {
-                    popup
+                    Task::batch([popup, load])
                 }
             }
             Message::PopupClosed(id) => {
                 if self.popup == Some(id) {
                     self.popup = None;
+                    self.power_open = false;
                 }
                 Task::none()
+            }
+            Message::Loaded(loaded) => {
+                let Loaded {
+                    apps,
+                    most_used,
+                    config,
+                } = *loaded;
+                self.apps = apps;
+                self.usage_top = most_used;
+                self.config = config;
+                Task::none()
+            }
+            Message::Launch(i) => {
+                let Some(app) = self.apps.get(i).cloned() else {
+                    return Task::none();
+                };
+                let close = self.close_popup();
+                let launch = Task::perform(crate::launch::app(app), |()| cosmic::action::none());
+                Task::batch([close, launch])
+            }
+            // The letter-jump grid arrives in a later change.
+            Message::LetterGrid(_) => Task::none(),
+            Message::PowerMenu(open) => {
+                self.power_open = open;
+                Task::none()
+            }
+            Message::Power(p) => {
+                self.power_open = false;
+                Task::perform(crate::session::run(p), move |r| match r {
+                    Ok(()) => cosmic::action::none(),
+                    Err(e) => cosmic::action::app(Message::ShowError(fl!(
+                        "power-failed",
+                        action = fl!(p.l10n_key()),
+                        error = e
+                    ))),
+                })
+            }
+            Message::ShowError(e) => {
+                self.error = Some(e);
+                Task::none()
+            }
+            Message::OpenFiles => {
+                let r = crate::session::open_files();
+                self.report(r);
+                self.close_popup()
+            }
+            Message::OpenSettingsApp => {
+                let r = crate::session::open_settings_page(None);
+                self.report(r);
+                self.close_popup()
+            }
+            Message::OpenAccount => {
+                let r = crate::session::open_settings_page(Some("users"));
+                self.report(r);
+                self.close_popup()
             }
         }
     }
@@ -117,7 +262,22 @@ impl Application for App {
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Message> {
-        let body = container(text(fl!("app-name")))
+        let spacing = self.spacing();
+        let columns = row::with_children(vec![
+            ui::rail::view(self.power_open),
+            ui::app_list::view(&self.apps, &self.usage_top, self.config.show_most_used),
+            Space::new().width(Length::Fill).into(),
+        ])
+        .spacing(12)
+        .height(Length::Fill);
+
+        let mut body = column::with_capacity(2).push(columns);
+        if let Some(e) = &self.error {
+            body = body.push(text::caption(e.clone()));
+        }
+
+        let body = container(body.spacing(spacing.gap))
+            .padding(spacing.section)
             .width(Length::Fixed(POPUP_WIDTH))
             .height(Length::Fixed(POPUP_HEIGHT));
         self.core.applet.popup_container(body).into()
