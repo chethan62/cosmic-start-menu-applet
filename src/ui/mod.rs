@@ -7,6 +7,7 @@
 //! behind each choice were found the hard way.
 
 pub mod app_list;
+pub mod context;
 pub mod rail;
 pub mod tiles;
 

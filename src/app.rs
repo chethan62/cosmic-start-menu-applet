@@ -3,12 +3,12 @@
 use cosmic::app::{Core, Task};
 use cosmic::iced::keyboard::{key::Named, Key as KeyCode};
 use cosmic::iced::window::{self, Id};
-use cosmic::iced::{Length, Limits, Subscription};
-use cosmic::widget::{column, container, row, text, text_input};
+use cosmic::iced::{Length, Limits, Point, Subscription};
+use cosmic::widget::{column, container, mouse_area, popover, row, text, text_input};
 use cosmic::{Application, Element};
 
 use crate::apps::App as AppEntry;
-use crate::config::Config;
+use crate::config::{Config, TileRef, TileSize};
 use crate::fl;
 use crate::session::Power;
 use crate::ui::{self, Spacing};
@@ -30,6 +30,24 @@ pub struct App {
     /// Keyboard selection among search results.
     selected: usize,
     search_id: cosmic::widget::Id,
+    /// Last pointer position over the popup, where a right-click menu opens.
+    pointer: Point,
+    context: Option<Context>,
+}
+
+/// What a right-click menu is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// Index into the app list.
+    App(usize),
+    /// A tile, by its place in the config.
+    Tile(TileRef),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Context {
+    pub target: Target,
+    pub at: Point,
 }
 
 /// Keys the search handles itself. Enter comes from the input's own submit,
@@ -57,6 +75,15 @@ pub enum Message {
     Query(String),
     SearchKey(Key),
     Submit,
+    Pointer(Point),
+    OpenContext(Target),
+    CloseContext,
+    Pin(String),
+    Unpin(String),
+    Resize(TileRef, TileSize),
+    MoveToGroup(TileRef, usize),
+    NewGroupWith(TileRef),
+    RunAction(usize, usize),
     OpenFiles,
     OpenSettingsApp,
     OpenAccount,
@@ -88,10 +115,29 @@ fn load() -> Loaded {
 impl App {
     fn close_popup(&mut self) -> Task<Message> {
         self.power_open = false;
+        self.context = None;
         match self.popup.take() {
             Some(id) => cosmic::iced::platform_specific::shell::commands::popup::destroy_popup(id),
             None => Task::none(),
         }
+    }
+
+    /// Apply a change to the config and save it off-thread.
+    fn edit(&mut self, f: impl FnOnce(&mut Config)) -> Task<Message> {
+        f(&mut self.config);
+        self.context = None;
+        let snapshot = self.config.clone();
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || snapshot.save())
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()))
+            },
+            |r| match r {
+                Ok(()) => cosmic::action::none(),
+                Err(e) => cosmic::action::app(Message::ShowError(e)),
+            },
+        )
     }
 
     fn report(&mut self, result: Result<(), String>) {
@@ -134,6 +180,8 @@ impl Application for App {
                 query: String::new(),
                 selected: 0,
                 search_id: cosmic::widget::Id::new("start-menu-search"),
+                pointer: Point::ORIGIN,
+                context: None,
             },
             Task::none(),
         )
@@ -157,6 +205,7 @@ impl Application for App {
                 self.error = None;
                 self.query.clear();
                 self.selected = 0;
+                self.context = None;
                 let id = window::Id::unique();
                 self.popup = Some(id);
                 let mut settings = self.core.applet.get_popup_settings(
@@ -292,6 +341,44 @@ impl Application for App {
                     None => Task::none(),
                 }
             }
+            Message::Pointer(p) => {
+                self.pointer = p;
+                Task::none()
+            }
+            Message::OpenContext(target) => {
+                self.power_open = false;
+                self.context = Some(Context {
+                    target,
+                    at: self.pointer,
+                });
+                Task::none()
+            }
+            Message::CloseContext => {
+                self.context = None;
+                Task::none()
+            }
+            Message::Pin(id) => self.edit(|c| c.pin(&id)),
+            Message::Unpin(id) => self.edit(|c| c.unpin(&id)),
+            Message::Resize(r, size) => self.edit(|c| c.resize(r, size)),
+            Message::MoveToGroup(r, g) => self.edit(|c| c.move_tile(r, g, usize::MAX)),
+            Message::NewGroupWith(r) => self.edit(|c| {
+                let g = c.add_group(fl!("new-group-name"));
+                c.move_tile(r, g, 0);
+            }),
+            Message::RunAction(i, k) => {
+                let Some(app) = self.apps.get(i).cloned() else {
+                    return Task::none();
+                };
+                let Some(action) = app.actions.get(k).cloned() else {
+                    return Task::none();
+                };
+                let close = self.close_popup();
+                let run =
+                    Task::perform(crate::launch::action(app.id, action, app.terminal), |()| {
+                        cosmic::action::none()
+                    });
+                Task::batch([close, run])
+            }
             Message::ShowError(e) => {
                 self.error = Some(e);
                 Task::none()
@@ -385,6 +472,18 @@ impl Application for App {
             .padding(spacing.section)
             .width(Length::Fixed(POPUP_WIDTH))
             .height(Length::Fixed(POPUP_HEIGHT));
-        self.core.applet.popup_container(body).into()
+
+        // The pointer is tracked over the same box the menu is positioned
+        // in, so the menu opens exactly where the right-click was.
+        let tracked = mouse_area(body).on_move(Message::Pointer);
+        let mut with_menu = popover(tracked).on_close(Message::CloseContext);
+        if let Some(ctx) = &self.context {
+            if let Some(menu) = ui::context::view(ctx, &self.apps, &self.config) {
+                with_menu = with_menu
+                    .popup(menu)
+                    .position(popover::Position::Point(ctx.at));
+            }
+        }
+        self.core.applet.popup_container(with_menu).into()
     }
 }

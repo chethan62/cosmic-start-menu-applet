@@ -3,10 +3,10 @@
 
 use cosmic::desktop::IconSourceExt;
 use cosmic::iced::{Alignment, Length};
-use cosmic::widget::{button, column, container, icon, row, scrollable, text};
+use cosmic::widget::{button, column, container, icon, mouse_area, row, scrollable, text};
 use cosmic::Element;
 
-use crate::app::Message;
+use crate::app::{Message, Target};
 use crate::apps::{self, App};
 use crate::fl;
 use crate::ui::{quiet_button, selected_button, HEADER_HEIGHT, ICON, LIST_WIDTH, ROW_HEIGHT};
@@ -20,7 +20,7 @@ pub fn app_row<'a>(app: &'a App, index: usize, selected: bool) -> Element<'a, Me
     ])
     .spacing(12)
     .align_y(Alignment::Center);
-    button::custom(body)
+    let body = button::custom(body)
         .class(if selected {
             selected_button()
         } else {
@@ -29,7 +29,9 @@ pub fn app_row<'a>(app: &'a App, index: usize, selected: bool) -> Element<'a, Me
         .padding([0, 10])
         .width(Length::Fill)
         .height(Length::Fixed(ROW_HEIGHT))
-        .on_press(Message::Launch(index))
+        .on_press(Message::Launch(index));
+    mouse_area(body)
+        .on_right_press(Message::OpenContext(Target::App(index)))
         .into()
 }
 

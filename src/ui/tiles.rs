@@ -9,10 +9,10 @@ use std::collections::HashSet;
 use cosmic::desktop::IconSourceExt;
 use cosmic::iced::widget::{pin, stack};
 use cosmic::iced::{Alignment, Length};
-use cosmic::widget::{button, column, container, icon, scrollable, text};
+use cosmic::widget::{button, column, container, icon, mouse_area, scrollable, text};
 use cosmic::Element;
 
-use crate::app::Message;
+use crate::app::{Message, Target};
 use crate::apps::App;
 use crate::config::{Config, TileFinish, TileSize};
 use crate::tile_layout::{self, COLUMNS};
@@ -31,6 +31,7 @@ pub fn grid_width(spacing: Spacing) -> f32 {
 }
 
 fn tile<'a>(
+    at: (usize, usize),
     app: &'a App,
     size: TileSize,
     (w, h): (f32, f32),
@@ -55,7 +56,7 @@ fn tile<'a>(
         .align_x(Alignment::Start)
         .into(),
     };
-    button::custom(content)
+    let button = button::custom(content)
         .class(tile_button_class(finish))
         .padding(match size {
             TileSize::Small => [0, 0],
@@ -63,7 +64,9 @@ fn tile<'a>(
         })
         .width(Length::Fixed(w))
         .height(Length::Fixed(h))
-        .on_press(Message::LaunchId(app.id.clone()))
+        .on_press(Message::LaunchId(app.id.clone()));
+    mouse_area(button)
+        .on_right_press(Message::OpenContext(Target::Tile(at)))
         .into()
 }
 
@@ -76,7 +79,7 @@ pub fn view<'a>(config: &'a Config, apps: &'a [App], spacing: Spacing) -> Elemen
         let sizes: Vec<TileSize> = visible.iter().map(|(_, t)| t.size).collect();
         let packed = tile_layout::pack(&sizes);
         let mut layer: Vec<Element<'a, Message>> = Vec::with_capacity(visible.len());
-        for ((_, t), p) in visible.iter().zip(packed.tiles.iter()) {
+        for ((ti, t), p) in visible.iter().zip(packed.tiles.iter()) {
             let Some(app) = apps.iter().find(|a| a.id == t.app) else {
                 continue;
             };
@@ -86,7 +89,7 @@ pub fn view<'a>(config: &'a Config, apps: &'a [App], spacing: Spacing) -> Elemen
             );
             let dims = (span(p.cols, gap), span(p.rows, gap));
             layer.push(
-                pin(tile(app, t.size, dims, config.finish))
+                pin(tile((g, *ti), app, t.size, dims, config.finish))
                     .x(at.0)
                     .y(at.1)
                     .into(),
