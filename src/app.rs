@@ -33,6 +33,7 @@ pub struct App {
     /// Last pointer position over the popup, where a right-click menu opens.
     pointer: Point,
     context: Option<Context>,
+    edit: ui::tiles::Edit,
 }
 
 /// What a right-click menu is about.
@@ -84,6 +85,14 @@ pub enum Message {
     MoveToGroup(TileRef, usize),
     NewGroupWith(TileRef),
     RunAction(usize, usize),
+    ToggleEdit,
+    /// A tile pressed in edit mode: pick it up, drop onto it, or put it back.
+    TileClicked(TileRef),
+    DropEnd(usize),
+    DropNew,
+    AddGroup,
+    RenameGroup(usize, String),
+    RemoveGroup(usize),
     OpenFiles,
     OpenSettingsApp,
     OpenAccount,
@@ -116,6 +125,7 @@ impl App {
     fn close_popup(&mut self) -> Task<Message> {
         self.power_open = false;
         self.context = None;
+        self.edit = ui::tiles::Edit::default();
         match self.popup.take() {
             Some(id) => cosmic::iced::platform_specific::shell::commands::popup::destroy_popup(id),
             None => Task::none(),
@@ -182,6 +192,7 @@ impl Application for App {
                 search_id: cosmic::widget::Id::new("start-menu-search"),
                 pointer: Point::ORIGIN,
                 context: None,
+                edit: ui::tiles::Edit::default(),
             },
             Task::none(),
         )
@@ -379,6 +390,52 @@ impl Application for App {
                     });
                 Task::batch([close, run])
             }
+            Message::ToggleEdit => {
+                let was_on = self.edit.on;
+                self.edit = ui::tiles::Edit {
+                    on: !was_on,
+                    picked: None,
+                };
+                // Renames are kept in memory while typing and saved on Done.
+                if was_on {
+                    self.edit(|_| {})
+                } else {
+                    Task::none()
+                }
+            }
+            Message::TileClicked(at) => match self.edit.picked {
+                None => {
+                    self.edit.picked = Some(at);
+                    Task::none()
+                }
+                Some(from) if from == at => {
+                    self.edit.picked = None;
+                    Task::none()
+                }
+                Some(from) => {
+                    self.edit.picked = None;
+                    self.edit(|c| c.move_tile(from, at.0, at.1))
+                }
+            },
+            Message::DropEnd(g) => match self.edit.picked.take() {
+                Some(from) => self.edit(|c| c.move_tile(from, g, usize::MAX)),
+                None => Task::none(),
+            },
+            Message::DropNew => match self.edit.picked.take() {
+                Some(from) => self.edit(|c| {
+                    let g = c.add_group(fl!("new-group-name"));
+                    c.move_tile(from, g, 0);
+                }),
+                None => Task::none(),
+            },
+            Message::AddGroup => self.edit(|c| {
+                c.add_group(fl!("new-group-name"));
+            }),
+            Message::RenameGroup(g, name) => {
+                self.config.rename_group(g, name);
+                Task::none()
+            }
+            Message::RemoveGroup(g) => self.edit(|c| c.remove_group(g)),
             Message::ShowError(e) => {
                 self.error = Some(e);
                 Task::none()
@@ -454,7 +511,7 @@ impl Application for App {
                 ])
                 .spacing(spacing.section)
                 .into(),
-                ui::tiles::view(&self.config, &self.apps, spacing),
+                ui::tiles::view(&self.config, &self.apps, spacing, self.edit),
             ])
             .spacing(12)
             .into()
