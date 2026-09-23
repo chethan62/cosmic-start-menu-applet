@@ -1,6 +1,6 @@
 # Start Menu applet — design spec
 
-*2026-09-23 · status: draft for review*
+*2026-09-23 · status: approved; amended 2026-09-23 after the clickable mockup (§10)*
 
 ## 1. Goal
 
@@ -131,3 +131,38 @@ would re-solve theming and blur for little gain.
 Live tiles; recent files and "jump lists"; web search in the search box;
 full-screen Start mode; replacing the Super-key launcher. v1 is a panel button
 only. Super-key binding is a v2 candidate.
+
+## 10. Amendments from the clickable mockup (2026-09-23)
+
+James tried the mockup (`docs/mockups/start-menu-mockup.html`) and asked for the
+changes below. Where they conflict with an earlier section, this section wins.
+
+1. **The avatar follows Roundness.** It is a circle on Round, a rounded square
+   (`radius_s`) on Slightly round, and square (`radius_s`, which is 2 px) on Square.
+2. **Three ways to organise the app list** (`list_mode`), switched from a small
+   "A–Z ▾" button above the list and in Settings:
+   - **A–Z** (default): as in §3.
+   - **Category**: grouped by the app's own desktop-entry category. The first
+     match in this priority order wins: Game → Games, Graphics → Graphics & 3D,
+     AudioVideo → Sound & Video, Development, Network → Internet, Office,
+     Education, Science, Settings, System, Utility → Utilities. Anything else
+     goes under Other. Tapping a heading opens a jump grid of category names.
+   - **Folders**: James's **existing COSMIC App Library folders**, read from
+     `~/.config/cosmic/com.system76.CosmicAppLibrary/v1/groups`. A folder is
+     either a list of app ids, or a category filter with `exclude`/`include`
+     lists. Folders open and close inline, Windows 10 style. Apps that are in
+     no folder follow underneath, A–Z. The file is read only, never written.
+3. **Three options for the right side** (`right_side`), switched from a
+   "Tiles ▾" button at the top of the right side and in Settings:
+   - **Tiles** (default): the tile groups from §3.
+   - **Favourites**: a plain four-column grid of icons with names, showing the
+     **dock's favourites** (`com.system76.CosmicAppList` → `favorites`). The
+     app right-click menu gains "Add to / Remove from favourites", which
+     writes that same COSMIC setting, so the dock and the menu stay in step.
+   - **Recent**: the same grid, showing recently launched apps, newest first,
+     up to 16. The list is kept in the usage state file beside the counts.
+   The Edit button appears only in Tiles mode.
+4. **The Accent tile finish** joins Frosted, Solid and Outline. Tiles filled
+   with the accent colour, like classic Windows 10.
+5. `config.toml` gains `list_mode = "az" | "category" | "folders"` and
+   `right_side = "tiles" | "favourites" | "recent"`.

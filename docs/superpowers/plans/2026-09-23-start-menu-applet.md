@@ -8,7 +8,11 @@
 
 **Tech Stack:** Rust (edition 2021, MSRV 1.85), libcosmic pinned at rev `ef490df50b0a05a21c494c3f75737581bf0b39d9`, `freedesktop-desktop-entry` 0.8 (via libcosmic's `desktop` feature), zbus 5, tokio, serde + toml, Fluent.
 
-**Spec:** `docs/superpowers/specs/2026-09-23-start-menu-applet-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-23-start-menu-applet-design.md`. §10 holds the amendments from the mockup and wins over earlier sections.
+
+**Mockup:** `docs/mockups/start-menu-mockup.html` is the clickable prototype James approved. When a layout detail is unclear, open it in a browser and match it.
+
+**Execution order:** Tasks 1–14, then 16–19, then 15.
 
 **Reference code (copy and adapt, never link):** `~/1_Projects/cosmic-control-center-applet`. That repo is MIT/Apache, the same licence as this one, so copying is fine. Files named below as "CCCA `src/…`" are in that repo.
 
@@ -2089,7 +2093,7 @@ In `App::view`, wrap the panel button in `mouse_area(button).on_right_press(Mess
 
 ---
 
-### Task 15: README, and swap it in for the App Library button
+### Task 15: README, and swap it in for the App Library button (run LAST, after Tasks 16–19)
 
 **Files:**
 - Modify: `README.md`, `CLAUDE.md` (project status), `context/` (a new context note)
@@ -2122,3 +2126,406 @@ Settings → Desktop → Panel → Configure applets:
 This is reversible: the App Library can be added back from the same screen. Then run through the spec §8 manual list once more on the real panel.
 
 - [ ] **Step 4: Commit** — "Document the Start Menu and mark v0.1 ready" (with trailers). **Do not push.** Ask James before the repo goes to GitHub.
+
+---
+
+## Amendment tasks (from the mockup, spec §10)
+
+### Task 16: New config options, the Accent finish, and recent launches
+
+**Files:**
+- Modify: `src/config.rs`, `src/usage.rs`, `src/launch.rs`
+
+**Interfaces:**
+- Produces:
+  ```rust
+  // config.rs
+  #[serde(rename_all="lowercase")] pub enum ListMode { #[default] Az, Category, Folders }
+  #[serde(rename_all="lowercase")] pub enum RightSide { #[default] Tiles, Favourites, Recent }
+  pub enum TileFinish { Frosted, Solid, Outline, Accent }   // Accent added
+  pub struct Config { …, #[serde(default)] pub list_mode: ListMode, #[serde(default)] pub right_side: RightSide }
+  // usage.rs
+  pub struct Usage { pub counts: BTreeMap<String,u32>, #[serde(default)] pub recent: Vec<String> }
+  impl Usage { pub fn recent(&self, n: usize, installed: &HashSet<&str>) -> Vec<String> } // newest first
+  pub const RECENT_CAP: usize = 16;
+  ```
+  `Usage::record` now also moves the id to the front of `recent` and trims it to `RECENT_CAP`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// config.rs tests
+#[test]
+fn new_modes_default_and_round_trip() {
+    let c: Config = toml::from_str("").unwrap();
+    assert_eq!((c.list_mode, c.right_side), (ListMode::Az, RightSide::Tiles));
+    let c: Config = toml::from_str("list_mode = \"folders\"\nright_side = \"recent\"\nfinish = \"accent\"").unwrap();
+    assert_eq!((c.list_mode, c.right_side, c.finish), (ListMode::Folders, RightSide::Recent, TileFinish::Accent));
+}
+
+// usage.rs tests
+#[test]
+fn recent_is_newest_first_deduped_and_capped() {
+    let mut u = Usage::default();
+    for i in 0..20 { u.record(&format!("app{i}")); }
+    u.record("app5");
+    assert_eq!(u.recent.len(), RECENT_CAP);
+    assert_eq!(u.recent[0], "app5");
+    assert_eq!(u.recent.iter().filter(|a| *a == "app5").count(), 1);
+    let inst: HashSet<&str> = ["app5", "app19"].into();
+    assert_eq!(u.recent(8, &inst), ["app5", "app19"]);
+}
+
+#[test]
+fn old_usage_files_without_recent_still_load() {
+    let d = tempfile::tempdir().unwrap();
+    let p = d.path().join("usage.toml");
+    std::fs::write(&p, "[counts]\nfirefox = 3\n").unwrap();
+    let u = Usage::load_from(&p);
+    assert_eq!(u.counts["firefox"], 3);
+    assert!(u.recent.is_empty());
+}
+```
+
+- [ ] **Step 2: Run to verify they fail** — `cargo test config:: usage::`
+
+- [ ] **Step 3: Implement**
+
+Add the two enums with `#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]`, the `Accent` variant, and the two `#[serde(default)]` fields on `Config`. Then in `usage.rs`:
+
+```rust
+pub const RECENT_CAP: usize = 16;
+
+pub fn record(&mut self, app: &str) {
+    let n = self.counts.entry(app.to_owned()).or_insert(0);
+    *n = n.saturating_add(1);
+    self.recent.retain(|a| a != app);
+    self.recent.insert(0, app.to_owned());
+    self.recent.truncate(RECENT_CAP);
+}
+
+pub fn recent(&self, n: usize, installed: &HashSet<&str>) -> Vec<String> {
+    self.recent.iter().filter(|a| installed.contains(a.as_str())).take(n).cloned().collect()
+}
+```
+
+In `ui/mod.rs`'s `finish_paint`, `Accent` paints `theme.cosmic().accent_color()` as a solid fill. Its text and icon colour is `theme.cosmic().on_accent_color()`, set on the tile button's style, which is the one place the tile sets a text colour.
+
+- [ ] **Step 4: Run to verify they pass** — `cargo test`
+
+- [ ] **Step 5: Commit** — "Add list and right-side modes, the Accent finish, and recent launches" (with trailers).
+
+---
+
+### Task 17: `folders` — read the App Library's folders, and group apps by category
+
+**Files:**
+- Create: `src/folders.rs`
+- Modify: `src/apps.rs` (add `categories: Vec<String>` to `App`, filled from `de.categories()`), `src/main.rs`, `Cargo.toml` (`ron = "0.12"`, already in the lock file via libcosmic)
+
+**Interfaces:**
+- Produces:
+  ```rust
+  // apps.rs
+  pub fn category_of(app: &App) -> &'static str     // l10n key: "cat-games", "cat-graphics", … "cat-other"
+  pub const CATEGORY_ORDER: &[&str]                  // keys in display order, "cat-other" last
+  pub fn category_sections(apps: &[App]) -> Vec<(&'static str, Vec<usize>)>
+  // folders.rs
+  pub struct Folder { pub name: String, pub apps: Vec<usize> }     // indices into apps, sorted by name
+  pub fn parse(ron: &str) -> Vec<RawFolder>                         // tolerant: bad file → empty
+  pub fn resolve(raw: &[RawFolder], apps: &[App]) -> (Vec<Folder>, Vec<usize> /* apps in no folder */)
+  pub fn load(apps: &[App]) -> (Vec<Folder>, Vec<usize>)            // reads ~/.config/cosmic/com.system76.CosmicAppLibrary/v1/groups
+  ```
+
+- [ ] **Step 1: Write the failing tests**
+
+```rust
+// folders.rs
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::apps::App;
+
+    const GROUPS: &str = r#"[
+        (name: "Games", icon: "folder-symbolic", filter: AppIds(["openttd", "0ad", "not-installed"])),
+        (name: "Utilities", icon: "folder-symbolic", filter: Categories(
+            categories: ["Utility"], exclude: ["calc"], include: ["btop"])),
+    ]"#;
+
+    fn app(id: &str, name: &str, cats: &[&str]) -> App {
+        App { id: id.into(), name: name.into(), categories: cats.iter().map(|s| s.to_string()).collect(), ..App::default() }
+    }
+
+    #[test]
+    fn resolves_id_lists_and_category_filters() {
+        let apps = vec![
+            app("0ad", "0 A.D.", &["Game"]), app("btop", "btop++", &["System"]),
+            app("calc", "Calculator", &["Utility"]), app("micro", "Micro", &["Utility"]),
+            app("openttd", "OpenTTD", &["Game"]), app("vim", "Vim", &["TextEditor"]),
+        ];
+        let (folders, loose) = resolve(&parse(GROUPS), &apps);
+        assert_eq!(folders[0].name, "Games");
+        assert_eq!(folders[0].apps, [0, 4]);           // not-installed dropped
+        assert_eq!(folders[1].apps, [1, 3]);           // Utility minus calc, plus btop
+        assert_eq!(loose, [2, 5]);                     // calc and vim are in no folder
+    }
+
+    #[test]
+    fn a_bad_file_means_no_folders() {
+        assert!(parse("not ron at all").is_empty());
+        assert!(parse("").is_empty());
+    }
+}
+
+// apps.rs — add to its tests
+#[test]
+fn category_priority_and_other() {
+    let mk = |c: &[&str]| App { categories: c.iter().map(|s| s.to_string()).collect(), ..App::default() };
+    assert_eq!(category_of(&mk(&["Utility", "Development"])), "cat-development");
+    assert_eq!(category_of(&mk(&["Graphics", "3DGraphics"])), "cat-graphics");
+    assert_eq!(category_of(&mk(&["COSMIC"])), "cat-other");
+}
+```
+
+- [ ] **Step 2: Run to verify they fail** — `cargo test folders:: apps::`
+
+- [ ] **Step 3: Implement `folders.rs`**
+
+```rust
+//! The folders James already made in COSMIC's App Library, reused as the
+//! Start menu's "Folders" view. Read-only: the App Library owns this file.
+
+use serde::Deserialize;
+use crate::apps::App;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawFolder {
+    pub name: String,
+    #[serde(default)]
+    pub filter: Filter,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub enum Filter {
+    AppIds(Vec<String>),
+    Categories {
+        #[serde(default)] categories: Vec<String>,
+        #[serde(default)] exclude: Vec<String>,
+        #[serde(default)] include: Vec<String>,
+    },
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+pub struct Folder { pub name: String, pub apps: Vec<usize> }
+
+pub fn parse(ron_text: &str) -> Vec<RawFolder> {
+    ron::from_str(ron_text).unwrap_or_else(|e| {
+        tracing::debug!("App Library folders unreadable: {e}");
+        Vec::new()
+    })
+}
+
+fn matches(filter: &Filter, app: &App) -> bool {
+    match filter {
+        Filter::AppIds(ids) => ids.iter().any(|id| *id == app.id),
+        Filter::Categories { categories, exclude, include } => {
+            include.contains(&app.id)
+                || (!exclude.contains(&app.id) && app.categories.iter().any(|c| categories.contains(c)))
+        }
+        Filter::Unknown => false,
+    }
+}
+
+pub fn resolve(raw: &[RawFolder], apps: &[App]) -> (Vec<Folder>, Vec<usize>) {
+    let mut used = vec![false; apps.len()];
+    let folders = raw.iter().map(|f| {
+        let idx: Vec<usize> = (0..apps.len()).filter(|&i| matches(&f.filter, &apps[i])).collect();
+        for &i in &idx { used[i] = true; }
+        Folder { name: f.name.clone(), apps: idx }  // `apps` is already A–Z, so this is sorted
+    }).collect();
+    let loose = (0..apps.len()).filter(|&i| !used[i]).collect();
+    (folders, loose)
+}
+
+pub fn load(apps: &[App]) -> (Vec<Folder>, Vec<usize>) {
+    let text = dirs::config_dir()
+        .map(|d| d.join("cosmic/com.system76.CosmicAppLibrary/v1/groups"))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default();
+    resolve(&parse(&text), apps)
+}
+```
+
+If `#[serde(other)]` on a unit variant is rejected alongside the data variants by `ron`, drop the `Unknown` variant. A file with an unknown filter kind then parses to an empty list through the `unwrap_or_else`, which is acceptable.
+
+- [ ] **Step 4: Implement the categories in `apps.rs`**
+
+```rust
+const MAIN: &[(&str, &str)] = &[
+    ("Game", "cat-games"), ("Graphics", "cat-graphics"), ("AudioVideo", "cat-audio-video"),
+    ("Development", "cat-development"), ("Network", "cat-internet"), ("Office", "cat-office"),
+    ("Education", "cat-education"), ("Science", "cat-science"), ("Settings", "cat-settings"),
+    ("System", "cat-system"), ("Utility", "cat-utilities"),
+];
+pub const CATEGORY_ORDER: &[&str] = &["cat-games", "cat-graphics", "cat-audio-video", "cat-development",
+    "cat-internet", "cat-office", "cat-education", "cat-science", "cat-settings", "cat-system",
+    "cat-utilities", "cat-other"];
+
+pub fn category_of(app: &App) -> &'static str {
+    MAIN.iter().find(|(k, _)| app.categories.iter().any(|c| c == k)).map_or("cat-other", |(_, v)| v)
+}
+
+pub fn category_sections(apps: &[App]) -> Vec<(&'static str, Vec<usize>)> {
+    CATEGORY_ORDER.iter().filter_map(|&key| {
+        let idx: Vec<usize> = (0..apps.len()).filter(|&i| category_of(&apps[i]) == key).collect();
+        (!idx.is_empty()).then_some((key, idx))
+    }).collect()
+}
+```
+
+Add to `main.ftl`:
+```ftl
+cat-games = Games
+cat-graphics = Graphics & 3D
+cat-audio-video = Sound & Video
+cat-development = Development
+cat-internet = Internet
+cat-office = Office
+cat-education = Education
+cat-science = Science
+cat-settings = Settings
+cat-system = System
+cat-utilities = Utilities
+cat-other = Other
+```
+
+- [ ] **Step 5: Run to verify they pass** — `cargo test`
+
+- [ ] **Step 6: Commit** — "Read App Library folders and group apps by category" (with trailers).
+
+---
+
+### Task 18: List modes in the popup
+
+**Files:**
+- Modify: `src/ui/app_list.rs`, `src/app.rs`, `i18n/en/main.ftl`
+
+**Interfaces:**
+- Consumes: `config::ListMode`, `apps::category_sections`, `folders::{load, Folder}`
+- Produces: state `folders: Vec<Folder>`, `loose: Vec<usize>`, `open_folders: HashSet<usize>`, `mode_menu: bool`. Messages: `ModeMenu(bool)`, `SetListMode(ListMode)`, `ToggleFolder(usize)`, `JumpToCategory(&'static str)`.
+
+- [ ] **Step 1: Strings** — `all-apps = All apps`, `mode-az = A–Z`, `mode-category = Category`, `mode-folders = Folders`, `folders = Folders`.
+
+- [ ] **Step 2: Load folders with the apps**
+
+Inside the `spawn_blocking` in `TogglePopup` (Task 8), also compute `folders::load(&apps)` and carry `(folders, loose)` in `AppsLoaded`.
+
+- [ ] **Step 3: The list bar**
+
+Between the search box and the list, add a row: `text::caption(fl!("all-apps"))` on the left and a `popover` button on the right labelled with the current mode plus a chevron. It opens a menu of the three modes, with a check on the current one. `SetListMode(m)` → `edit(|c| c.list_mode = m)` (the saving helper from Task 11), closes the menu, and scrolls the list to the top. Hide the bar while searching.
+
+- [ ] **Step 4: Draw each mode** (the mockup's `renderList` is the reference)
+
+- `Az`: unchanged.
+- `Category`: for each `(key, idx)` in `category_sections`, a heading button `fl!(key)`, then the rows. The heading opens the jump grid, which now shows a two-column grid of category names (`JumpToCategory`). Reuse `offset_of` from Task 13 with category keys in place of letters. Generalise its `char` parameter to a `&str` label, and update Task 13's test to match.
+- `Folders`: a "Folders" section header. Then, for each folder, a row showing a folder icon on a `radius_s` tinted base, the name, the app count and a chevron (rotated when open) → `ToggleFolder(i)`. An open folder's apps are indented under it, with a divider line on the left. After the folders comes the A–Z block built from `loose` only; letter headers and jumps work on that subset. If no folders are found (no file, or a bad one), Folders mode shows the plain A–Z list.
+
+- [ ] **Step 5: Check by hand** — switch between the three modes from the list bar. Category headings jump correctly. Folders shows Design, Games and Utilities with the right apps, matching the App Library. Close and reopen the menu: the mode is kept.
+
+- [ ] **Step 6: Commit** — "Organise the app list by category or App Library folder" (with trailers).
+
+---
+
+### Task 19: Right side — Favourites and Recent grids; the avatar follows roundness
+
+**Files:**
+- Create: `src/favorites.rs`
+- Modify: `src/ui/tiles.rs`, `src/ui/rail.rs`, `src/app.rs`, `src/main.rs`, `i18n/en/main.ftl`
+
+**Interfaces:**
+- Produces:
+  ```rust
+  // favorites.rs — the dock's favourites, via cosmic-config (the same store the dock watches)
+  pub fn read() -> Vec<String>
+  pub fn with_added(list: &[String], id: &str) -> Vec<String>     // pure; appends if absent
+  pub fn with_removed(list: &[String], id: &str) -> Vec<String>   // pure
+  pub fn write(list: &[String]) -> Result<(), String>
+  ```
+  State: `favs: Vec<String>`, `recent: Vec<String>`, `right_menu: bool`. Messages: `RightMenu(bool)`, `SetRightSide(RightSide)`, `AddFavourite(String)`, `RemoveFavourite(String)`.
+
+- [ ] **Step 1: Write the failing tests** (`favorites.rs`)
+
+```rust
+#[test]
+fn add_and_remove_are_idempotent_and_keep_order() {
+    let l = vec!["a".to_string(), "b".to_string()];
+    assert_eq!(with_added(&l, "c"), ["a", "b", "c"]);
+    assert_eq!(with_added(&l, "a"), ["a", "b"]);
+    assert_eq!(with_removed(&l, "a"), ["b"]);
+    assert_eq!(with_removed(&l, "zzz"), ["a", "b"]);
+}
+```
+
+- [ ] **Step 2: Implement**
+
+```rust
+//! The dock's favourites. Read and written through cosmic-config — the same
+//! store the dock watches — so adding one here shows up in the dock at once.
+
+use cosmic::cosmic_config::{Config, ConfigGet, ConfigSet};
+
+const ID: &str = "com.system76.CosmicAppList";
+
+pub fn read() -> Vec<String> {
+    Config::new(ID, 1).ok().and_then(|c| c.get::<Vec<String>>("favorites").ok()).unwrap_or_default()
+}
+
+pub fn with_added(list: &[String], id: &str) -> Vec<String> {
+    let mut v = list.to_vec();
+    if !v.iter().any(|x| x == id) { v.push(id.to_owned()); }
+    v
+}
+
+pub fn with_removed(list: &[String], id: &str) -> Vec<String> {
+    list.iter().filter(|x| *x != id).cloned().collect()
+}
+
+pub fn write(list: &[String]) -> Result<(), String> {
+    Config::new(ID, 1).map_err(|e| e.to_string())?.set("favorites", list.to_vec()).map_err(|e| e.to_string())
+}
+```
+
+`config::parse_favorites` from Task 4 is now redundant for reading. Switch `favorites_file()` in `config.rs` to `favorites::read()`, keep `parse_favorites` and its test for `Config::seeded`, and delete neither.
+
+Manual check of the write path: add an app to favourites from the menu and confirm it appears in the dock straight away. Then remove it again. This is reversible.
+
+- [ ] **Step 3: Draw the grids** (`ui/tiles.rs`)
+
+- In the right column's header row, on the left, add a `popover` button labelled with the current mode ("Tiles", "Favourites" or "Recent") plus a chevron. It opens a three-item menu → `SetRightSide`, saved through `edit`. The Edit button stays on the right and is shown only in Tiles mode; leaving Tiles also leaves edit mode.
+- In Favourites and Recent modes, draw a four-column grid of `quiet_button` cells, each a 40 px icon over an elided caption name. Build it from `row`s of four, not `Grid`. Clicking a cell launches the app, and right-clicking gives the app context menu. Below the grid, add a caption: "Same list as your dock." for Favourites, or "Apps you opened recently." for Recent. Show at most 16 cells.
+- Recent comes from `Usage::recent(16, &installed)`, loaded with the Most used list in the popup-open `spawn_blocking`.
+
+- [ ] **Step 4: Context menu entries**
+
+In the `Target::App` menu, after Pin/Unpin, add "Add to favourites" or "Remove from favourites" (based on `self.favs`). Run `favorites::write(&with_added(..))` off-thread, then update `self.favs`.
+
+- [ ] **Step 5: The avatar follows roundness** (`ui/rail.rs`)
+
+Replace the `avatar-default-symbolic` icon with a 28 px avatar container: the user's AccountsService `IconFile` image if present, otherwise their initial on an accent fill. Its radius is:
+
+```rust
+fn avatar_radius(theme: &cosmic::Theme, size: f32) -> f32 {
+    let r = theme.cosmic().corner_radii;
+    if r.radius_xl[0] >= size / 2.0 { size / 2.0 } else { r.radius_s[0] }  // Round → circle; else radius_s
+}
+```
+
+Round gives a circle, Slightly round an 8 px square, and Square a 2 px square. Read `IconFile` from `org.freedesktop.Accounts` (`FindUserByName($USER)` → `org.freedesktop.Accounts.User.IconFile`) in the popup-open task. On error, fall back to the initial.
+
+Strings: `right-tiles = Tiles`, `right-favourites = Favourites`, `right-recent = Recent`, `fav-add = Add to favourites`, `fav-remove = Remove from favourites`, `fav-note = Same list as your dock.`, `recent-note = Apps you opened recently.`
+
+- [ ] **Step 6: Check by hand** — switch the right side through all three modes. Favourites matches the dock exactly. Adding a favourite from the menu shows up in the dock. Opening an app puts it first in Recent. Cycle Roundness: the avatar goes circle → rounded square → square.
+
+- [ ] **Step 7: Commit** — "Offer favourites and recent grids on the right, and shape the avatar by roundness" (with trailers).

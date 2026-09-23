@@ -1,0 +1,640 @@
+<title>Start Menu Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&family=Noto+Sans+Mono:wght@400;500&display=swap">
+<style>
+/* ---------- page chrome (follows the viewer's theme) ---------- */
+:root{
+  --pg-bg:#E9ECEE; --pg-ink:#1D2328; --pg-dim:#5B6770; --pg-card:#F7F9FA; --pg-line:#D2D8DC;
+  --pg-accent:#2C6E7D; --pg-on-accent:#FFFFFF; --pg-chip:#E1E6E9;
+  --ui:"Open Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"Noto Sans Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --pg-bg:#121517; --pg-ink:#E4E8EA; --pg-dim:#98A4AB; --pg-card:#1A1F22; --pg-line:#2C3439;
+    --pg-accent:#7FC6D4; --pg-on-accent:#0D1A1D; --pg-chip:#232A2E;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --pg-bg:#121517; --pg-ink:#E4E8EA; --pg-dim:#98A4AB; --pg-card:#1A1F22; --pg-line:#2C3439;
+  --pg-accent:#7FC6D4; --pg-on-accent:#0D1A1D; --pg-chip:#232A2E;
+}
+html,body{height:100%}
+body{background:var(--pg-bg);color:var(--pg-ink);font-family:var(--ui);font-size:14px;line-height:1.45}
+.wrap{max-width:1180px;margin:0 auto;padding-inline:16px;padding-block:20px 48px;display:grid;gap:20px}
+.head h1{font-size:22px;font-weight:700;margin:0;text-wrap:balance;letter-spacing:-.01em}
+.head p{margin:4px 0 0;color:var(--pg-dim);max-width:62ch}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px;align-items:start}
+@media (max-width:980px){.layout{grid-template-columns:minmax(0,1fr)}}
+.stage-wrap{overflow-x:auto;border-radius:12px;border:1px solid var(--pg-line);background:var(--pg-card)}
+.stage-box{position:relative}
+.panel-side{display:grid;gap:14px}
+.card{background:var(--pg-card);border:1px solid var(--pg-line);border-radius:12px;padding:14px 14px 16px}
+.card h2{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--pg-dim);margin:0 0 10px}
+.field{display:grid;gap:6px;margin-bottom:12px}
+.field:last-child{margin-bottom:0}
+.field > span{font-size:13px;font-weight:600}
+.seg{display:flex;flex-wrap:wrap;gap:4px;background:var(--pg-chip);border-radius:9px;padding:3px}
+.seg button{flex:1 1 auto;border:0;background:transparent;color:var(--pg-ink);font:inherit;font-size:12.5px;padding:5px 8px;border-radius:7px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--pg-accent);color:var(--pg-on-accent);font-weight:600}
+.swatches{display:flex;flex-wrap:wrap;gap:6px}
+.swatches button{width:26px;height:26px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0;outline-offset:2px}
+.swatches button[aria-pressed="true"]{border-color:var(--pg-ink)}
+.btnrow{display:flex;flex-wrap:wrap;gap:8px}
+.pbtn{border:1px solid var(--pg-line);background:var(--pg-card);color:var(--pg-ink);font:inherit;font-size:13px;padding:7px 12px;border-radius:8px;cursor:pointer}
+.pbtn.primary{background:var(--pg-accent);color:var(--pg-on-accent);border-color:transparent;font-weight:600}
+.tips{margin:0;padding-left:18px;color:var(--pg-dim);font-size:13px;display:grid;gap:4px}
+.tips b{color:var(--pg-ink);font-weight:600}
+details.cfg summary{cursor:pointer;font-size:13px;color:var(--pg-dim)}
+details.cfg textarea{width:100%;box-sizing:border-box;margin-top:8px;height:220px;font-family:var(--mono);font-size:11.5px;background:var(--pg-chip);color:var(--pg-ink);border:1px solid var(--pg-line);border-radius:8px;padding:8px;resize:vertical}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--pg-accent);outline-offset:2px}
+
+/* ---------- the simulated desktop (driven by the COSMIC controls, not the page theme) ---------- */
+.stage{position:absolute;left:0;top:0;width:720px;height:700px;transform-origin:0 0;overflow:hidden;font-family:var(--ui);color:var(--text);
+  --cell:44px;--gap:4px}
+.wall{position:absolute;inset:0;background:linear-gradient(180deg,#1F3B5C 0%,#4F6E8F 38%,#E3A47A 62%,#F1C48E 70%,#2A3E4F 71%,#152331 100%)}
+.wall i{position:absolute;display:block}
+.wall .sun{width:120px;height:120px;border-radius:50%;left:430px;top:330px;background:radial-gradient(circle,#FFE3B0 0%,#F7B57A 60%,rgba(247,181,122,0) 72%)}
+.wall .m1{left:-40px;right:-40px;bottom:180px;height:260px;background:#2B4460;clip-path:polygon(0 100%,8% 52%,17% 70%,29% 20%,41% 64%,52% 38%,63% 72%,74% 30%,86% 58%,100% 36%,100% 100%)}
+.wall .m2{left:-40px;right:-40px;bottom:180px;height:170px;background:#1B2E43;clip-path:polygon(0 100%,0 60%,12% 30%,22% 66%,35% 44%,47% 80%,58% 40%,70% 70%,81% 26%,92% 62%,100% 48%,100% 100%)}
+.wall .fj{left:0;right:0;bottom:0;height:185px;background:repeating-linear-gradient(180deg,rgba(255,214,170,.18) 0 2px,rgba(0,0,0,0) 2px 9px),linear-gradient(180deg,#34506B,#0E1A26)}
+
+.cpanel{position:absolute;left:0;right:0;height:36px;display:flex;align-items:center;gap:6px;padding:0 6px;background:var(--panel-bg);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);color:var(--text);font-size:13px;z-index:3}
+.cpanel.top{top:0}.cpanel.bottom{bottom:0}
+.cpanel .pb{height:28px;min-width:28px;border:0;background:transparent;color:inherit;border-radius:var(--r-pill);display:grid;place-items:center;cursor:pointer;padding:0 8px}
+.cpanel .pb:hover{background:var(--hover)}
+.cpanel .pb.on{background:var(--sel)}
+.cpanel .clock{position:absolute;left:50%;transform:translateX(-50%);font-weight:600}
+.cpanel .tray{margin-left:auto;display:flex;gap:2px}
+.cpanel .dock-apps{display:flex;gap:2px}
+
+.menu{position:absolute;left:8px;width:680px;height:600px;box-sizing:border-box;border-radius:var(--r-m);background:var(--menu-bg);
+  -webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:0 12px 40px rgba(0,0,0,.28),0 0 0 1px var(--edge);
+  display:grid;grid-template-columns:44px 272px minmax(0,1fr);gap:12px;padding:12px 12px 12px 6px;z-index:2;font-size:13.5px}
+.menu.top{top:44px}.menu.bottom{bottom:44px}
+.menu[hidden]{display:none!important}
+.menu.searching{grid-template-columns:44px minmax(0,1fr)}
+.menu.searching .tilecol{display:none}
+
+.ico{width:16px;height:16px;display:block;flex:none}
+.rail{position:relative;display:flex;flex-direction:column;gap:4px;align-items:center}
+.rail .sp{flex:1}
+.rb{width:40px;height:40px;border:0;background:transparent;color:var(--text);border-radius:var(--r-s);display:grid;place-items:center;cursor:pointer}
+.rb:hover{background:var(--hover)}
+.rb.on{background:var(--sel)}
+.avatar{width:28px;height:28px;border-radius:var(--r-avatar);background:linear-gradient(135deg,var(--accent-fill),color-mix(in oklab,var(--accent-fill) 55%,#000));color:var(--on-accent);display:grid;place-items:center;font-weight:700;font-size:12px}
+.pop{position:absolute;min-width:190px;padding:6px;border-radius:var(--r-m);background:var(--pop-bg);box-shadow:0 10px 30px rgba(0,0,0,.3),0 0 0 1px var(--edge);z-index:10;display:grid;gap:1px}
+.pop .mi{display:flex;align-items:center;gap:10px;border:0;background:transparent;color:var(--text);font:inherit;font-size:13px;padding:7px 10px;border-radius:var(--r-s);cursor:pointer;text-align:left;width:100%}
+.pop .mi:hover{background:var(--hover)}
+.pop .mi .chk{margin-left:auto}
+.pop .sep{height:1px;background:var(--divider);margin:4px 6px}
+.pop .lbl{font-size:11px;color:var(--dim);padding:6px 10px 2px;text-transform:uppercase;letter-spacing:.06em}
+.rail .pop{left:48px;bottom:0}
+
+.mid{display:flex;flex-direction:column;min-height:0;gap:8px}
+.search{display:flex;align-items:center;gap:8px;height:36px;padding:0 12px;border-radius:var(--r-pill);background:var(--field);box-shadow:inset 0 0 0 1px var(--divider)}
+.search:focus-within{box-shadow:inset 0 0 0 2px var(--accent-fill)}
+.search input{flex:1;border:0;background:transparent;color:var(--text);font:inherit;font-size:13.5px;outline:none;min-width:0}
+.search input::placeholder{color:var(--dim)}
+.list{flex:1;overflow-y:auto;min-height:0;position:relative;padding-right:4px;scrollbar-width:thin}
+.sect{font-size:11.5px;font-weight:700;color:var(--dim);padding:10px 10px 4px;text-transform:uppercase;letter-spacing:.06em}
+.lh{display:block;border:0;background:transparent;color:var(--text);font:inherit;font-weight:700;font-size:14px;padding:8px 10px 4px;border-radius:var(--r-s);cursor:pointer;width:34px;text-align:left}
+.lh:hover{background:var(--hover)}
+.row{display:flex;align-items:center;gap:12px;width:100%;border:0;background:transparent;color:var(--text);font:inherit;padding:5px 10px;border-radius:var(--r-s);cursor:pointer;text-align:left;min-height:36px;-webkit-touch-callout:none;user-select:none}
+.row:hover{background:var(--hover)}
+.row.sel{background:var(--sel)}
+.row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .sub{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:45%}
+.row .pinmark{color:var(--dim)}
+.appic{flex:none;display:grid;place-items:center;color:#fff;font-weight:700;border-radius:24%;box-shadow:inset 0 -2px 0 rgba(0,0,0,.18)}
+.letters{position:absolute;inset:0;background:var(--menu-solid);border-radius:var(--r-s);display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:10px;align-content:start;z-index:4}
+.letters button{height:48px;border:0;border-radius:var(--r-s);background:var(--comp);color:var(--text);font:inherit;font-size:17px;font-weight:700;cursor:pointer}
+.letters button:hover{background:var(--hover)}
+.letters button:disabled{opacity:.3;cursor:default}
+.empty{padding:24px 12px;color:var(--dim)}
+.listbar{position:relative;display:flex;align-items:center;justify-content:space-between;padding:0 4px 0 10px;height:26px;font-size:12px;color:var(--dim)}
+.listbar .tb{font-size:12px;padding:3px 8px;color:var(--text)}
+.listbar .pop{top:28px;right:0;min-width:170px}
+.lh.wide{width:auto;font-size:12.5px;text-transform:uppercase;letter-spacing:.05em}
+.row.folder .fi{width:24px;height:24px;border-radius:var(--r-s);display:grid;place-items:center;background:var(--sel);color:var(--text);flex:none}
+.row.folder .cnt{font-size:11.5px;color:var(--dim)}
+.row .chev{transition:transform .12s ease;color:var(--dim)}
+.row.open .chev{transform:rotate(90deg)}
+.inset{padding-left:14px;border-left:1px solid var(--divider);margin-left:21px}
+.letters.cats{grid-template-columns:repeat(2,1fr)}
+.letters.cats button{font-size:13px;height:44px}
+
+.tilecol{display:flex;flex-direction:column;min-height:0}
+.tilehead{display:flex;align-items:center;justify-content:flex-end;gap:6px;height:36px}
+.tb{border:0;background:transparent;color:var(--text);font:inherit;font-size:12.5px;padding:5px 10px;border-radius:var(--r-pill);cursor:pointer;display:flex;align-items:center;gap:6px}
+.tb:hover{background:var(--hover)}
+.tb.on{background:var(--accent-fill);color:var(--on-accent);font-weight:600}
+.groups{flex:1;overflow-y:auto;min-height:0;padding-bottom:8px;scrollbar-width:thin}
+.gname{font-size:12.5px;font-weight:600;padding:10px 2px 6px;display:flex;align-items:center;gap:6px;border-radius:var(--r-s)}
+.gname input{flex:1;min-width:0;font:inherit;font-weight:600;background:var(--field);color:var(--text);border:0;box-shadow:inset 0 0 0 1px var(--divider);border-radius:6px;padding:3px 6px}
+.gname .drop{font-weight:400;font-size:11.5px;color:var(--dim)}
+.gname.target{background:var(--sel);cursor:pointer;padding-left:8px}
+.grid{position:relative;width:calc(var(--cell)*6 + var(--gap)*5)}
+.tile{position:absolute;box-sizing:border-box;border:0;color:var(--text);font:inherit;cursor:pointer;border-radius:var(--r-tile);padding:6px 8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;overflow:hidden;-webkit-touch-callout:none;user-select:none;transition:transform .12s ease,background-color .12s ease}
+.tile .tn{position:absolute;left:8px;right:6px;bottom:5px;font-size:11px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile.wide{flex-direction:row;justify-content:flex-start;padding-left:14px}
+.tile.small .tn{display:none}
+.tile.medium .appic,.tile.wide .appic{margin-bottom:10px}
+.f-frosted .tile{background:var(--tile-frost)}
+.f-solid .tile{background:var(--comp)}
+.f-outline .tile{background:transparent;box-shadow:inset 0 0 0 1px var(--divider)}
+.f-accent .tile{background:var(--accent-fill);color:var(--on-accent)}
+.tile:hover{background:var(--hover)!important;color:var(--text)}
+.editing .tile{box-shadow:inset 0 0 0 1px var(--dim);animation:none}
+.tile.picked{outline:2px solid var(--accent-fill);outline-offset:1px;transform:scale(.94);opacity:.8}
+.appgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding-top:4px}
+.gcell{border:0;background:transparent;color:var(--text);font:inherit;font-size:11.5px;display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 4px 8px;border-radius:var(--r-s);cursor:pointer;-webkit-touch-callout:none;user-select:none}
+.gcell:hover{background:var(--hover)}
+.gcell span.gl{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gsect{font-size:12.5px;font-weight:600;padding:10px 2px 4px}
+.gnote{font-size:11.5px;color:var(--dim);padding:2px 2px 0}
+.tilehead{justify-content:space-between}
+.tilehead .pop{top:34px;left:0;min-width:180px}
+.tilehead{position:relative}
+.newgroup{margin-top:12px;width:100%;border:1px dashed var(--divider);background:transparent;color:var(--dim);font:inherit;font-size:12.5px;padding:10px;border-radius:var(--r-s);cursor:pointer}
+.newgroup:hover{background:var(--hover);color:var(--text)}
+.ctx{position:absolute;z-index:20}
+.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:56px;background:var(--pop-bg);color:var(--text);padding:8px 14px;border-radius:var(--r-pill);font-size:12.5px;box-shadow:0 6px 20px rgba(0,0,0,.3);z-index:30;white-space:nowrap}
+.cpanel.bottom ~ .toast{bottom:auto;top:56px}
+@media (prefers-reduced-motion:reduce){.tile{transition:none}}
+</style>
+
+<main class="wrap">
+  <header class="head">
+    <h1>Start Menu</h1>
+    <p>Clickable mockup of the panel applet. It's filled with the 66 apps installed on your laptop. The folders are your real App Library folders. The icons are placeholders, and the tile groups and "Most used" counts are examples. The Favourites are your real dock favourites. Changes stay in this browser.</p>
+  </header>
+
+  <div class="layout">
+    <div class="stage-wrap" id="stageWrap">
+      <div class="stage-box" id="stageBox">
+        <div class="stage" id="stage">
+          <div class="wall"><i class="sun"></i><i class="m1"></i><i class="m2"></i><i class="fj"></i></div>
+          <div class="cpanel top" id="cpanel"></div>
+          <div class="menu top" id="menu">
+            <nav class="rail" id="rail" aria-label="Account and power"></nav>
+            <div class="mid">
+              <label class="search" for="q">
+                <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="4.5"/><path d="M10.4 10.4 14 14" stroke-linecap="round"/></svg>
+                <input id="q" type="text" autocomplete="off" spellcheck="false" placeholder="Type to search">
+              </label>
+              <div class="listbar" id="listbar"></div>
+              <div class="list" id="list"></div>
+            </div>
+            <section class="tilecol" aria-label="Pinned tiles">
+              <div class="tilehead" id="tilehead"></div>
+              <div class="groups" id="groups"></div>
+            </section>
+          </div>
+          <div class="ctx" id="ctx" hidden></div>
+          <div class="toast" id="toast" hidden></div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="panel-side">
+      <div class="card">
+        <h2>COSMIC Appearance</h2>
+        <div class="field"><span>Mode</span><div class="seg" data-key="mode"></div></div>
+        <div class="field"><span>Accent</span><div class="swatches" id="swatches"></div></div>
+        <div class="field"><span>Roundness</span><div class="seg" data-key="round"></div></div>
+        <div class="field"><span>Frosted glass</span><div class="seg" data-key="frosted"></div></div>
+        <div class="field"><span>Panel</span><div class="seg" data-key="panel"></div></div>
+      </div>
+      <div class="card">
+        <h2>Start Menu settings</h2>
+        <div class="field"><span>Tile finish</span><div class="seg" data-key="finish"></div></div>
+        <div class="field"><span>Right side</span><div class="seg" data-key="right"></div></div>
+        <div class="field"><span>App list</span><div class="seg" data-key="listMode"></div></div>
+        <div class="field"><span>Most used list</span><div class="seg" data-key="showMost"></div></div>
+        <div class="field"><span>Preview size</span><div class="seg" data-key="zoom"></div></div>
+      </div>
+      <div class="card">
+        <h2>Try</h2>
+        <ul class="tips">
+          <li><b>Type</b> anywhere to search. Use ↑ ↓ and Enter to pick a result. Esc clears the search, and a second Esc closes the menu.</li>
+          <li><b>Right-click</b> (or <b>long-press</b> on a phone) an app or a tile to pin it, resize it or move it.</li>
+          <li><b>Edit</b>: tap a tile to pick it up, then tap where it should go. You can rename groups here too.</li>
+          <li><b>Tap a letter</b> header to jump through the A–Z list.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h2>Send me your layout</h2>
+        <div class="btnrow">
+          <button class="pbtn primary" id="copyCfg" type="button">Copy layout</button>
+          <button class="pbtn" id="reset" type="button">Reset mockup</button>
+        </div>
+        <details class="cfg" id="cfgBox"><summary>Show layout text</summary><textarea id="cfgText" readonly></textarea></details>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script>
+(() => {
+"use strict";
+// ---- data: the apps installed on the laptop (id, name, generic name, keywords, actions) ----
+const RAW = [["0ad","0 A.D.","","RTS;Real-Time Strategy;Economic Simulation Game;History;","Atlas;"],["nm-connection-editor","Advanced Network Configuration","","",""],["Alacritty","Alacritty","Terminal","","New;"],["com.jeffser.Alpaca","Alpaca","","ai;ollama;llm","quick-ask;"],["bssh","Avahi SSH Server Browser","","",""],["bvnc","Avahi VNC Server Browser","","",""],["avahi-discover","Avahi Zeroconf Browser","","",""],["com.bambulab.BambuStudio","BambuStudio","3D Printing Software","3D;Printing;Slicer;slice;printer;gcode;stl;",""],["com.bitwarden.desktop","Bitwarden","Password Manager","",""],["blender","Blender","3D modeler","3d;cg;modeling;animation;sculpting;render;",""],["btop","btop++","System Monitor","system;process;task",""],["btrfs-assistant","Btrfs Assistant","","",""],["cachyos-hello","CachyOS Hello","","",""],["org.cachyos.KernelManager","CachyOS Kernel Manager","Kernel Manager","cachyos;system;kernel;",""],["cachyos-pi","CachyOS Package Installer","","",""],["org.gnome.Calculator","Calculator","","calculation;arithmetic;scientific;",""],["chromium","Chromium","Web Browser","","new-window;new-private-window;"],["com.anthropic.Claude","Claude","AI Assistant","AI;Chat;Assistant;Code;LLM;","NewChat;NewCode;ContinueLast;"],["cmake-gui","CMake","","",""],["com.system76.CosmicFiles","COSMIC Files","","Folder;Manager;",""],["com.system76.CosmicPlayer","COSMIC Media Player","","Audio;Film;Movie;Music;Video;",""],["com.system76.CosmicScreenshot","COSMIC Screenshot","","capture;screenshot;",""],["com.system76.CosmicSettings","COSMIC Settings","","Settings;",""],["com.system76.CosmicStore","COSMIC Store","","App;Software;Store;",""],["com.system76.CosmicMonitor","COSMIC System Monitor","","Monitor;System;Process;CPU;Memory;",""],["com.system76.CosmicTerm","COSMIC Terminal","","Command;Shell;Terminal;CLI;",""],["com.system76.CosmicEdit","COSMIC Text Editor","","Text;Editor;",""],["org.kde.dolphin","Dolphin","File Manager","files;Explorer;Finder;",""],["org.freecad.FreeCAD","FreeCAD","CAD Application","",""],["lstopo","Hardware Locality lstopo","","System;Utility;",""],["dev.jamesjohn.Horizon","Horizon","Web Browser","",""],["chrome-oneamlnfjmfechoalcegobjpfmlffnjh-Default","Immich","","","Albums;Map;Photos"],["org.inkscape.Inkscape","Inkscape","Vector Graphics Editor","image;editor;vector;drawing;","new-window;"],["kitty","kitty","Terminal emulator","",""],["limine-snapper-restore","Limine-snapper-restore","","",""],["localsend","LocalSend","","",""],["org.gnome.Meld","Meld","Diff Viewer","diff;merge;",""],["micro","Micro","Text Editor","text;editor;terminal;",""],["chrome-ccfkfminemlfbfljklgimjnlcjplieam-Default","Mimir","","",""],["io.mrarm.mcpelauncher","Minecraft Bedrock Launcher","","",""],["chrome-caljekohnoigpoacpgfcficmojjlmioj-Default","Nextcloud","","",""],["com.nextcloud.desktopclient.nextcloud","Nextcloud Desktop","Folder Sync","syncing;file;sharing;",""],["openscad","OpenSCAD","","3d;solid;geometry;csg;model;stl;",""],["openttd","OpenTTD","","game;simulation;transport;tycoon;train;",""],["com.kagi.Orion","Orion Beta","","",""],["org.prismlauncher.PrismLauncher","Prism Launcher","","game;minecraft;mc;",""],["PrusaGcodeviewer","Prusa GCode viewer","","3D;Printing;Slicer;",""],["PrusaSlicer","PrusaSlicer","3D Printing Software","3D;Printing;Slicer;slice;printer;gcode;stl;",""],["assistant","Qt Assistant","Documentation viewer","",""],["qdbusviewer","Qt D-Bus Viewer","D-Bus Debugger","",""],["linguist","Qt Linguist","","",""],["qv4l2","Qt V4L2 test Utility","","video;grabber;V4L;",""],["qvidcap","Qt V4L2 video capture utility","","video;grabber;V4L;",""],["designer","Qt Widgets Designer","Interface Designer","",""],["qt6ct","Qt6 Settings","","settings;desktop;qt;",""],["dev.heppen.webapps","Quick Web Apps","","App;Software;Manager;",""],["org.cachyos.scx-manager","SchedExt GUI Manager","SCX Manager","cachyos;system;kernel;",""],["org.servo.Servo","Servo","","",""],["com.shellyorg.shelly","Shelly","","software;package;install;flatpak;pacman;aur;","FlatpakInstall;FlatpakUpdate;FlatpakRemove;"],["com.valvesoftware.Steam","Steam","","","Store;Community;Library;BigPicture;Friends;"],["org.gnome.TextEditor","Text Editor","Text Editor","write;notepad;","new-window;"],["dev.jamesjohn.CosmicThemeSync","Theme Sync","","theme;gtk;qt;cosmic;",""],["dev.deedles.Trayscale","Trayscale","Tailscale Client","tailscale;vpn;",""],["dev.edfloreshz.CosmicTweaks","Tweaks for COSMIC","COSMIC Tweaks","Layout;Configuration;",""],["vim","Vim","Text Editor","Text;editor;",""],["org.pulseaudio.pavucontrol","Volume Control","Volume Control","PulseAudio;Microphone;Volume;Audio;Mixer;",""]];
+
+const CATS = {"0ad":["Game","StrategyGame"],"nm-connection-editor":["GNOME","GTK","Settings","X-GNOME-NetworkSettings","X-GNOME-Utilities"],"Alacritty":["System","TerminalEmulator"],"com.jeffser.Alpaca":["Utility","Development","Chat"],"bssh":["GNOME","Network"],"bvnc":["GNOME","Network"],"avahi-discover":["GNOME","System"],"com.bambulab.BambuStudio":["Graphics","3DGraphics","Engineering"],"com.bitwarden.desktop":["System","Security"],"blender":["Graphics","3DGraphics"],"btop":["System","Monitor","ConsoleOnly"],"btrfs-assistant":["System"],"cachyos-hello":["GNOME","GTK","System"],"org.cachyos.KernelManager":["Qt","System"],"cachyos-pi":["System"],"org.gnome.Calculator":["GNOME","GTK","Utility","Calculator"],"chromium":["Network","WebBrowser"],"com.anthropic.Claude":["Utility","Development"],"cmake-gui":["Development","Building"],"com.system76.CosmicFiles":["COSMIC","Utility","FileManager"],"com.system76.CosmicPlayer":["COSMIC","AudioVideo","Player","Video"],"com.system76.CosmicScreenshot":["COSMIC","Utility"],"com.system76.CosmicSettings":["COSMIC"],"com.system76.CosmicStore":["COSMIC","System","PackageManager"],"com.system76.CosmicMonitor":["COSMIC","System","Monitor"],"com.system76.CosmicTerm":["COSMIC","System","TerminalEmulator"],"com.system76.CosmicEdit":["COSMIC","Utility","TextEditor"],"org.kde.dolphin":["Qt","KDE","System","FileTools","FileManager"],"org.freecad.FreeCAD":["Graphics","Science","Education","Engineering","X-CNC"],"lstopo":["System","Monitor"],"dev.jamesjohn.Horizon":["Network","WebBrowser"],"org.inkscape.Inkscape":["Graphics","VectorGraphics","GTK"],"kitty":["System","TerminalEmulator"],"limine-snapper-restore":["Utility"],"localsend":["Utility","Network"],"org.gnome.Meld":["GTK","Development"],"micro":["Utility","TextEditor","Development"],"io.mrarm.mcpelauncher":["Game","PackageManager"],"com.nextcloud.desktopclient.nextcloud":["Utility","X-SuSE-SyncUtility"],"openscad":["Graphics","3DGraphics","Engineering"],"openttd":["Game","Simulation"],"com.kagi.Orion":["Network","WebBrowser"],"org.prismlauncher.PrismLauncher":["Game","ActionGame","AdventureGame","Simulation","PackageManager"],"PrusaGcodeviewer":["Graphics","3DGraphics"],"PrusaSlicer":["Graphics","3DGraphics","Engineering"],"assistant":["Qt","Development","Documentation"],"qdbusviewer":["Qt","Development","Debugger"],"linguist":["Qt","Development"],"qv4l2":["AudioVideo"],"qvidcap":["AudioVideo"],"designer":["Qt","Development"],"qt6ct":["Settings","DesktopSettings","Qt"],"dev.heppen.webapps":["X-COSMIC","Utility"],"org.cachyos.scx-manager":["Qt","System"],"org.servo.Servo":["Network","WebBrowser"],"com.shellyorg.shelly":["System","Utility"],"com.valvesoftware.Steam":["Network","FileTransfer","Game"],"org.gnome.TextEditor":["GNOME","GTK","Utility","TextEditor"],"dev.jamesjohn.CosmicThemeSync":["Settings","DesktopSettings"],"dev.deedles.Trayscale":["System","GNOME","GTK"],"dev.edfloreshz.CosmicTweaks":["Utility","Settings","DesktopSettings"],"vim":["Utility","TextEditor"],"org.pulseaudio.pavucontrol":["AudioVideo","Audio","Mixer","GTK","Settings","X-XFCE-SettingsDialog","X-XFCE-HardwareSettings"]};
+const FOLDERS = [{"name":"Design","apps":["blender","org.inkscape.Inkscape","com.bambulab.BambuStudio","Alacritty","com.system76.CosmicTerm"]},{"name":"Games","apps":["io.mrarm.mcpelauncher","openttd","0ad","com.valvesoftware.Steam"]},{"name":"Utilities","apps":["nm-connection-editor","com.jeffser.Alpaca","bssh","bvnc","avahi-discover","btop","btrfs-assistant","cachyos-hello","org.cachyos.KernelManager","cachyos-pi","org.gnome.Calculator","cmake-gui","com.system76.CosmicPlayer","com.system76.CosmicScreenshot","com.system76.CosmicSettings","com.system76.CosmicStore","com.system76.CosmicMonitor","org.kde.dolphin","lstopo","kitty","limine-snapper-restore","org.gnome.Meld","micro","com.nextcloud.desktopclient.nextcloud","openscad","com.kagi.Orion","org.prismlauncher.PrismLauncher","PrusaGcodeviewer","PrusaSlicer","assistant","qdbusviewer","linguist","qv4l2","qvidcap","designer","qt6ct","dev.heppen.webapps","org.cachyos.scx-manager","org.servo.Servo","com.shellyorg.shelly","org.gnome.TextEditor","dev.edfloreshz.CosmicTweaks","vim","org.pulseaudio.pavucontrol"]}];
+const pretty = s => s.replace(/([a-z])([A-Z])/g,"$1 $2").replace(/[-_]/g," ").toLowerCase().replace(/^./,c=>c.toUpperCase());
+const APPS = RAW.map(([id,name,gen,kw,act]) => ({id,name,gen,kw:kw.split(";").filter(Boolean),actions:act.split(";").filter(Boolean).map(pretty)}))
+  .sort((a,b)=>a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+const BYID = new Map(APPS.map(a=>[a.id,a]));
+
+// ---- COSMIC-ish values ----
+const ACCENTS = {blue:"#63D0DF",indigo:"#A1C0EB",purple:"#E79CFE",pink:"#FF9CB1",red:"#FDA1A0",orange:"#FFAD00",yellow:"#F7E062",green:"#92CF9C",grey:"#CABAB4"};
+// radius_s, radius_m, radius_xl — COSMIC's Round / Slightly round / Square presets
+const ROUND = {round:[8,16,160],slight:[8,8,8],square:[2,2,2]};
+const PAL = {
+  light:{text:"#1C1C1C",dim:"#5E5E5E",layer:"236,236,236",comp:"#FBFBFB",hover:"rgba(0,0,0,.08)",divider:"rgba(0,0,0,.13)",field:"rgba(255,255,255,.7)",pop:"#F5F5F5",panel:"236,236,236"},
+  dark:{text:"#EAEAEA",dim:"#A6A6A6",layer:"30,30,30",comp:"#303030",hover:"rgba(255,255,255,.09)",divider:"rgba(255,255,255,.13)",field:"rgba(255,255,255,.06)",pop:"#2A2A2A",panel:"24,24,24"}
+};
+
+const DEFAULTS = () => ({
+  mode:"light",accent:"blue",round:"round",frosted:"on",panel:"top",finish:"frosted",showMost:"on",zoom:"fit",listMode:"az",right:"tiles",
+  favs:["com.anthropic.Claude","chromium","com.system76.CosmicTerm","chrome-ccfkfminemlfbfljklgimjnlcjplieam-Default","com.system76.CosmicFiles"],
+  recent:["com.anthropic.Claude","com.bambulab.BambuStudio","chromium","openscad","com.system76.CosmicTerm","blender","org.inkscape.Inkscape","com.system76.CosmicFiles"],
+  groups:[
+    {name:"Pinned",tiles:[{app:"com.anthropic.Claude",size:"medium"},{app:"chromium",size:"medium"},{app:"com.system76.CosmicTerm",size:"medium"},{app:"chrome-ccfkfminemlfbfljklgimjnlcjplieam-Default",size:"medium"},{app:"com.system76.CosmicFiles",size:"medium"}]},
+    {name:"Making (example)",tiles:[{app:"com.bambulab.BambuStudio",size:"wide"},{app:"openscad",size:"small"},{app:"blender",size:"small"},{app:"org.freecad.FreeCAD",size:"small"},{app:"PrusaSlicer",size:"small"},{app:"org.inkscape.Inkscape",size:"medium"}]}
+  ],
+  counts:{"com.anthropic.Claude":41,"chromium":33,"com.system76.CosmicTerm":20,"com.bambulab.BambuStudio":9,"openscad":7}
+});
+
+const KEY = "start-menu-mockup-v1";
+let S = DEFAULTS();
+try { const saved = JSON.parse(localStorage.getItem(KEY) || "null"); if (saved && Array.isArray(saved.groups)) S = Object.assign(DEFAULTS(), saved); } catch (e) {}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
+
+// transient UI state
+const U = {rightMenu:false,modeMenu:false,openFolders:new Set(),open:true,query:"",sel:0,letters:false,power:false,ctx:null,editing:false,pick:null,rename:null};
+
+const $ = id => document.getElementById(id);
+const stage = $("stage"), menu = $("menu"), list = $("list"), groupsEl = $("groups"), q = $("q"), ctxEl = $("ctx"), toastEl = $("toast");
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+// ---- icons ----
+const I = {
+  user:'<circle cx="8" cy="5.5" r="2.8"/><path d="M2.8 14c.6-2.8 2.7-4.2 5.2-4.2s4.6 1.4 5.2 4.2"/>',
+  folder:'<path d="M1.8 4.2c0-.7.5-1.2 1.2-1.2h3l1.5 1.6h5.5c.7 0 1.2.5 1.2 1.2v6.2c0 .7-.5 1.2-1.2 1.2H3c-.7 0-1.2-.5-1.2-1.2z"/>',
+  gear:'<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/>',
+  power:'<path d="M8 1.8v5.6"/><path d="M4.6 4a5.2 5.2 0 1 0 6.8 0"/>',
+  lock:'<rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.2 7V5a2.8 2.8 0 0 1 5.6 0v2"/>',
+  logout:'<path d="M6.5 2.5H3.5v11h3"/><path d="M10 5l3 3-3 3M13 8H6.5"/>',
+  sleep:'<path d="M13 9.6A5.6 5.6 0 1 1 6.4 3a4.4 4.4 0 0 0 6.6 6.6z"/>',
+  restart:'<path d="M13.2 8A5.2 5.2 0 1 1 11.4 4"/><path d="M11.6 1.6v2.8H8.8"/>',
+  pin:'<path d="M9.8 2.2l4 4-2.3.8-2.4 2.4.3 3-1.3 1.3-6.1-6.1 1.3-1.3 3 .3L8.8 4.4z"/><path d="M5 11l-3 3"/>',
+  resize:'<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="12" height="5" rx="1"/>',
+  move:'<path d="M2 8h11M10 5l3 3-3 3"/>',
+  plus:'<path d="M8 3v10M3 8h10"/>',
+  trash:'<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 9h5.8l.6-9"/>',
+  check:'<path d="M3 8.5l3 3 7-7"/>',
+  edit:'<path d="M10.5 2.5l3 3-8 8H2.5v-3z"/>',
+  chev:'<path d="M6 3.5l4.5 4.5L6 12.5"/>',
+  play:'<path d="M5 3l8 5-8 5z"/>',
+  start:'<rect x="2" y="2" width="5" height="5" rx="1.2"/><rect x="9" y="2" width="5" height="5" rx="1.2"/><rect x="2" y="9" width="5" height="5" rx="1.2"/><rect x="9" y="9" width="5" height="5" rx="1.2"/>',
+  wifi:'<path d="M1.8 6a9 9 0 0 1 12.4 0M4 8.4a5.8 5.8 0 0 1 8 0M6.2 10.8a2.6 2.6 0 0 1 3.6 0"/><circle cx="8" cy="13" r=".7"/>',
+  vol:'<path d="M2.5 6h2.5l3.5-3v10L5 10H2.5z"/><path d="M11 5.5a3.5 3.5 0 0 1 0 5M12.8 3.6a6 6 0 0 1 0 8.8"/>',
+  bat:'<rect x="1.8" y="4.5" width="11" height="7" rx="1.4"/><path d="M14.4 7v2"/><rect x="3.3" y="6" width="6" height="4" rx=".6" fill="currentColor" stroke="none"/>',
+  grid:'<circle cx="4" cy="4" r="1.2"/><circle cx="8" cy="4" r="1.2"/><circle cx="12" cy="4" r="1.2"/><circle cx="4" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12" cy="8" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="8" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/>'
+};
+const ico = (n, size=16) => `<svg class="ico" style="width:${size}px;height:${size}px" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
+
+// placeholder app icon: hue from the id, initials from the name
+const hue = s => { let h = 0; for (const c of s) h = (h*31 + c.charCodeAt(0)) >>> 0; return h % 360; };
+const initials = n => { const w = n.replace(/[^\p{L}\p{N} ]/gu," ").split(/\s+/).filter(Boolean); return ((w[0]||"?")[0] + (w.length>1 && w[0].length<=6 ? w[1][0] : (w[0]||"")[1]||"")).toUpperCase().slice(0,2); };
+const appIcon = (a, size) => { const h = hue(a.id); return `<span class="appic" style="width:${size}px;height:${size}px;font-size:${Math.round(size*.38)}px;background:linear-gradient(145deg,hsl(${h} 62% 58%),hsl(${(h+28)%360} 58% 40%))">${esc(initials(a.name))}</span>`; };
+
+// ---- logic mirrored from the Rust plan ----
+const letterOf = n => { const c = n.trim()[0]; return c && /\p{L}/u.test(c) ? c.toUpperCase() : "#"; };
+const MAIN = [["Game","Games"],["Graphics","Graphics & 3D"],["AudioVideo","Sound & Video"],["Development","Development"],["Network","Internet"],["Office","Office"],["Education","Education"],["Science","Science"],["Settings","Settings"],["System","System"],["Utility","Utilities"]];
+const catOf = a => { const c = CATS[a.id] || []; const m = MAIN.find(([k]) => c.includes(k)); return m ? m[1] : "Other"; };
+function catSections(){ const order = [...MAIN.map(m=>m[1]),"Other"]; const m = new Map(); APPS.forEach((a,i)=>{ const c = catOf(a); if(!m.has(c)) m.set(c,[]); m.get(c).push(i); }); return [...m.entries()].sort((a,b)=>order.indexOf(a[0])-order.indexOf(b[0])); }
+const inFolder = new Set(FOLDERS.flatMap(f=>f.apps));
+const slug = s => s.replace(/[^A-Za-z0-9]/g,"_");
+function sections(filter){ const m = new Map(); APPS.forEach((a,i)=>{ if (filter && !filter(a)) return; const l = letterOf(a.name); if(!m.has(l)) m.set(l,[]); m.get(l).push(i); }); return [...m.entries()].sort((a,b)=> (a[0]!=="#") - (b[0]!=="#") || a[0].localeCompare(b[0])); }
+function rank(query){
+  const qq = query.trim().toLowerCase(); if (!qq) return [];
+  const hits = [];
+  APPS.forEach((a,i)=>{ const n = a.name.toLowerCase(); let s = null;
+    if (n.startsWith(qq)) s = 0; else if (n.split(/[^\p{L}\p{N}]+/u).some(w=>w.startsWith(qq))) s = 1; else if (n.includes(qq)) s = 2;
+    else if ([a.gen,...a.kw].some(k=>k.toLowerCase().includes(qq))) s = 3;
+    if (s!==null) hits.push([s,i]); });
+  return hits.sort((x,y)=>x[0]-y[0]).map(h=>h[1]);
+}
+const FOOT = {small:[1,1],medium:[2,2],wide:[4,2]};
+function pack(sizes){
+  const occ = []; const out = [];
+  for (const s of sizes){ const [w,h] = FOOT[s]; let row = 0, col;
+    for(;;){ while (occ.length < row+h) occ.push([0,0,0,0,0,0]);
+      col = -1; for (let c=0;c<=6-w;c++){ let ok = true; for(let dc=0;dc<w&&ok;dc++) for(let dr=0;dr<h;dr++) if(occ[row+dr][c+dc]) {ok=false;break;} if(ok){col=c;break;} }
+      if (col>=0) break; row++; }
+    for(let dc=0;dc<w;dc++) for(let dr=0;dr<h;dr++) occ[row+dr][col+dc]=1;
+    out.push({col,row,w,h}); }
+  let rows = 0; occ.forEach((r,i)=>{ if (r.some(Boolean)) rows = i+1; });
+  return {tiles:out,rows};
+}
+const isPinned = id => S.groups.some(g=>g.tiles.some(t=>t.app===id));
+const pin = id => { if (isPinned(id)) return; if (!S.groups.length) S.groups.push({name:"Pinned",tiles:[]}); S.groups[0].tiles.push({app:id,size:"medium"}); };
+const unpin = id => S.groups.forEach(g=>g.tiles = g.tiles.filter(t=>t.app!==id));
+function moveTile(g,i,tg,ti){ if(!S.groups[g]||!S.groups[g].tiles[i]||!S.groups[tg]) return; const [t] = S.groups[g].tiles.splice(i,1); const d = S.groups[tg].tiles; d.splice(Math.min(ti,d.length),0,t); }
+function removeGroup(g){ const [r] = S.groups.splice(g,1); if(!S.groups.length){ S.groups.push({name:"Pinned",tiles:r.tiles}); return; } S.groups[Math.max(0,Math.min(g-1,S.groups.length-1))].tiles.push(...r.tiles); }
+function mostUsed(){ return Object.entries(S.counts).filter(([id])=>BYID.has(id)).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,5).map(e=>e[0]); }
+
+// ---- theme ----
+function applyTheme(){
+  const p = PAL[S.mode], acc = ACCENTS[S.accent], [rs,rm,rxl] = ROUND[S.round], frost = S.frosted==="on";
+  const accFill = S.mode==="light" ? `color-mix(in oklab, ${acc} 58%, #000)` : acc;
+  const v = {
+    "--text":p.text,"--dim":p.dim,"--comp":p.comp,"--hover":p.hover,"--divider":p.divider,"--field":p.field,
+    "--menu-bg":`rgba(${p.layer},${frost?0.78:1})`,"--menu-solid":`rgb(${p.layer})`,"--panel-bg":`rgba(${p.panel},${frost?0.72:1})`,
+    "--pop-bg":p.pop,"--edge":p.divider,"--blur":frost?"blur(22px) saturate(1.3)":"none",
+    "--accent-fill":accFill,"--on-accent":S.mode==="light"?"#FFFFFF":"#101010",
+    "--sel":`color-mix(in srgb, ${accFill} 24%, transparent)`,
+    "--tile-frost":`color-mix(in srgb, ${p.comp} 68%, transparent)`,
+    "--r-s":rs+"px","--r-avatar":S.round==="round"?"50%":rs+"px","--r-m":rm+"px","--r-tile":Math.min(rm,rxl)+"px","--r-pill":Math.min(18,rxl)+"px"
+  };
+  for (const k in v) stage.style.setProperty(k, v[k]);
+}
+
+// ---- rendering ----
+function renderPanel(){
+  const t = new Date(); const clock = t.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"}) + " " + t.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
+  $("cpanel").className = "cpanel " + S.panel;
+  $("cpanel").innerHTML = `<button class="pb ${U.open?"on":""}" data-act="toggle" title="Start Menu" aria-label="Start Menu" aria-expanded="${U.open}">${ico("start")}</button>
+    <span class="dock-apps">${["com.anthropic.Claude","chromium","com.system76.CosmicTerm"].map(id=>`<button class="pb" data-act="launch" data-id="${id}" title="${esc(BYID.get(id).name)}">${appIcon(BYID.get(id),18)}</button>`).join("")}</span>
+    <span class="clock">${esc(clock)}</span>
+    <span class="tray"><span class="pb">${ico("wifi")}</span><span class="pb">${ico("vol")}</span><span class="pb">${ico("bat")}</span><span class="pb">${ico("grid")}</span></span>`;
+}
+
+function renderRail(){
+  const pm = U.power ? `<div class="pop" role="menu">
+      ${[["lock","Lock"],["logout","Log out"],["sleep","Sleep"],["restart","Restart"],["power","Shut down"]].map(([i,l])=>`<button class="mi" role="menuitem" data-act="power" data-l="${l}">${ico(i)}${l}</button>`).join("")}
+    </div>` : "";
+  $("rail").innerHTML = `<button class="rb" data-act="osd" data-l="COSMIC Settings → Users" title="Account settings" aria-label="Account settings"><span class="avatar">J</span></button>
+    <span class="sp"></span>
+    <button class="rb" data-act="osd" data-l="COSMIC Files" title="Files" aria-label="Files">${ico("folder",18)}</button>
+    <button class="rb" data-act="osd" data-l="COSMIC Settings" title="Settings" aria-label="Settings">${ico("gear",18)}</button>
+    <button class="rb ${U.power?"on":""}" data-act="powermenu" title="Power" aria-label="Power" aria-expanded="${U.power}">${ico("power",18)}</button>${pm}`;
+}
+
+const rowHTML = (a, sel=false, sub="") => `<button class="row ${sel?"sel":""}" data-act="launch" data-id="${esc(a.id)}" data-ctx="app">${appIcon(a,24)}<span class="nm">${esc(a.name)}</span>${sub?`<span class="sub">${esc(sub)}</span>`:""}${isPinned(a.id)?`<span class="pinmark" title="Pinned">${ico("pin",12)}</span>`:""}</button>`;
+
+function renderList(){
+  menu.classList.toggle("searching", !!U.query.trim());
+  if (U.query.trim()){
+    const hits = rank(U.query); U.sel = Math.min(U.sel, Math.max(0,hits.length-1));
+    list.innerHTML = hits.length ? `<div class="sect">Best match</div>` + hits.map((i,n)=>rowHTML(APPS[i], n===U.sel, APPS[i].gen || (n===0?"App":""))).join("")
+      : `<div class="empty">No apps match “${esc(U.query.trim())}”</div>`;
+    return;
+  }
+  let h = "";
+  const mu = mostUsed();
+  if (S.showMost==="on" && mu.length) h += `<div class="sect">Most used</div>` + mu.map(id=>rowHTML(BYID.get(id))).join("");
+  const azBlock = filter => sections(filter).map(([l, idx]) => `<button class="lh" id="L-${slug(l)}" data-act="letters">${esc(l)}</button>` + idx.map(i=>rowHTML(APPS[i])).join("")).join("");
+  if (S.listMode === "category"){
+    for (const [c, idx] of catSections()) h += `<button class="lh wide" id="L-${slug(c)}" data-act="letters">${esc(c)}</button>` + idx.map(i=>rowHTML(APPS[i])).join("");
+  } else if (S.listMode === "folders"){
+    h += `<div class="sect">Folders</div>`;
+    FOLDERS.forEach((f, fi) => { const open = U.openFolders.has(fi); const apps = f.apps.filter(id=>BYID.has(id)).map(id=>BYID.get(id)).sort((a,b)=>a.name.localeCompare(b.name));
+      h += `<button class="row folder ${open?"open":""}" data-act="folder" data-f="${fi}" aria-expanded="${open}"><span class="fi">${ico("folder",14)}</span><span class="nm">${esc(f.name)}</span><span class="cnt">${apps.length}</span><span class="chev">${ico("chev",12)}</span></button>`;
+      if (open) h += `<div class="inset">${apps.map(a=>rowHTML(a)).join("")}</div>`; });
+    h += azBlock(a => !inFolder.has(a.id));
+  } else {
+    h += azBlock();
+  }
+  if (U.letters){
+    if (S.listMode === "category"){
+      const cs = catSections().map(c=>c[0]);
+      h += `<div class="letters cats" style="top:${list.scrollTop}px;bottom:auto;height:${list.clientHeight}px">${cs.map(c=>`<button data-act="jump" data-l="${esc(c)}">${esc(c)}</button>`).join("")}</div>`;
+    } else {
+      const present = new Set(sections(S.listMode==="folders" ? a=>!inFolder.has(a.id) : null).map(s=>s[0]));
+      const all = ["#",..."ABCDEFGHIJKLMNOPQRSTUVWXYZ",...[...present].filter(c=>c!=="#" && !/[A-Z]/.test(c))];
+      h += `<div class="letters" style="top:${list.scrollTop}px;bottom:auto;height:${list.clientHeight}px">${all.map(c=>`<button data-act="jump" data-l="${esc(c)}" ${present.has(c)?"":"disabled"}>${esc(c)}</button>`).join("")}</div>`;
+    }
+  }
+  const keep = list.scrollTop; list.innerHTML = h; list.scrollTop = keep;
+}
+
+const MODE_LABEL = {az:"A–Z",category:"Category",folders:"Folders"};
+function renderListbar(){
+  $("listbar").innerHTML = `<span>All apps</span><button class="tb" data-act="modemenu" aria-expanded="${U.modeMenu}">${MODE_LABEL[S.listMode]} ${ico("chev",10)}</button>` +
+    (U.modeMenu ? `<div class="pop" role="menu">${Object.entries(MODE_LABEL).map(([k,l])=>`<button class="mi" data-act="setmode" data-v="${k}">${l}${S.listMode===k?`<span class="chk">${ico("check",14)}</span>`:""}</button>`).join("")}</div>` : "");
+  $("listbar").hidden = !!U.query.trim();
+}
+const RIGHT_LABEL = {tiles:"Tiles",favs:"Favourites",recent:"Recent"};
+function renderTiles(){
+  const pick = `<button class="tb" data-act="rightmenu" aria-expanded="${U.rightMenu}">${RIGHT_LABEL[S.right]} ${ico("chev",10)}</button>` +
+    (U.rightMenu ? `<div class="pop" role="menu">${Object.entries(RIGHT_LABEL).map(([k,l])=>`<button class="mi" data-act="setright" data-v="${k}">${l}${S.right===k?`<span class="chk">${ico("check",14)}</span>`:""}</button>`).join("")}</div>` : "");
+  if (S.right !== "tiles"){
+    $("tilehead").innerHTML = pick;
+    const ids = (S.right==="favs" ? S.favs : S.recent).filter(id=>BYID.has(id)).slice(0, 16);
+    const note = S.right==="favs" ? "Same list as your dock. Right-click an app to add or remove it." : "The apps you opened most recently, newest first.";
+    groupsEl.innerHTML = `<div class="appgrid">${ids.map(id=>{ const a = BYID.get(id); return `<button class="gcell" data-act="launch" data-id="${esc(id)}" data-ctx="app" title="${esc(a.name)}">${appIcon(a,40)}<span class="gl">${esc(a.name)}</span></button>`; }).join("")}</div>` +
+      (ids.length ? "" : `<div class="gnote" style="padding:12px 2px">Nothing here yet.</div>`) + `<div class="gnote">${note}</div>`;
+    U.editing = false; U.pick = null; menu.classList.remove("editing");
+    return;
+  }
+  $("tilehead").innerHTML = pick + `<button class="tb ${U.editing?"on":""}" data-act="edit">${ico(U.editing?"check":"edit",14)}${U.editing?"Done":"Edit"}</button>`;
+  const f = "f-" + S.finish;
+  let h = "";
+  S.groups.forEach((g, gi) => {
+    const vis = g.tiles.map((t,i)=>({t,i})).filter(x=>BYID.has(x.t.app));
+    const pk = pack(vis.map(x=>x.t.size));
+    const cell = 44, gap = 4, span = n => n*cell + (n-1)*gap;
+    const target = U.editing && U.pick;
+    const nameHTML = U.editing
+      ? `<input value="${esc(g.name)}" data-act="rename" data-g="${gi}" aria-label="Group name"><button class="tb" data-act="delgroup" data-g="${gi}" title="Remove group" aria-label="Remove group">${ico("trash",14)}</button>`
+      : `<span>${esc(g.name)}</span>`;
+    h += `<div class="gname ${target?"target":""}" ${target?`data-act="dropend" data-g="${gi}"`:""}>${nameHTML}${target?`<span class="drop">drop here</span>`:""}</div>`;
+    h += `<div class="grid ${f}" style="height:${pk.rows?span(pk.rows):cell}px">`;
+    vis.forEach((x, n) => { const p = pk.tiles[n], a = BYID.get(x.t.app);
+      const picked = U.pick && U.pick.g===gi && U.pick.i===x.i;
+      const icoSize = x.t.size==="small" ? 26 : 34;
+      h += `<button class="tile ${x.t.size} ${picked?"picked":""}" style="left:${p.col*(cell+gap)}px;top:${p.row*(cell+gap)}px;width:${span(p.w)}px;height:${span(p.h)}px"
+        data-act="tile" data-g="${gi}" data-i="${x.i}" data-id="${esc(a.id)}" data-ctx="tile" title="${esc(a.name)}">${appIcon(a,icoSize)}<span class="tn">${esc(a.name)}</span></button>`; });
+    if (!vis.length) h += `<div style="font-size:12px;color:var(--dim);padding:12px 2px">Right-click an app → Pin to Start</div>`;
+    h += `</div>`;
+  });
+  if (U.editing) h += `<button class="newgroup" data-act="${U.pick?"dropnew":"addgroup"}">${U.pick?"Drop into a new group":"+ New group"}</button>`;
+  const keep = groupsEl.scrollTop; groupsEl.innerHTML = h; groupsEl.scrollTop = keep;
+  menu.classList.toggle("editing", U.editing);
+}
+
+function renderCtx(){
+  if (!U.ctx){ ctxEl.hidden = true; ctxEl.innerHTML = ""; return; }
+  const c = U.ctx, a = BYID.get(c.id);
+  let h = `<div class="pop" role="menu">`;
+  if (c.type === "app"){
+    h += isPinned(a.id) ? `<button class="mi" data-act="unpin" data-id="${esc(a.id)}">${ico("pin")}Unpin from Start</button>` : `<button class="mi" data-act="pin" data-id="${esc(a.id)}">${ico("pin")}Pin to Start</button>`;
+    h += S.favs.includes(a.id) ? `<button class="mi" data-act="unfav" data-id="${esc(a.id)}">${ico("check")}Remove from favourites</button>` : `<button class="mi" data-act="fav" data-id="${esc(a.id)}">${ico("plus")}Add to favourites</button>`;
+    if (a.actions.length){ h += `<div class="sep"></div>` + a.actions.map(x=>`<button class="mi" data-act="action" data-id="${esc(a.id)}" data-l="${esc(x)}">${ico("play")}${esc(x)}</button>`).join(""); }
+  } else {
+    const t = S.groups[c.g].tiles[c.i];
+    h += `<button class="mi" data-act="unpin" data-id="${esc(a.id)}">${ico("pin")}Unpin from Start</button><div class="sep"></div><div class="lbl">Resize</div>`;
+    h += ["small","medium","wide"].map(s=>`<button class="mi" data-act="resize" data-s="${s}">${ico("resize")}${pretty(s)}${t.size===s?`<span class="chk">${ico("check",14)}</span>`:""}</button>`).join("");
+    h += `<div class="sep"></div><div class="lbl">Move to group</div>`;
+    h += S.groups.map((g,gi)=> gi===c.g ? "" : `<button class="mi" data-act="moveto" data-g="${gi}">${ico("move")}${esc(g.name)}</button>`).join("");
+    h += `<button class="mi" data-act="movenew">${ico("plus")}New group</button>`;
+  }
+  h += `</div>`;
+  ctxEl.innerHTML = h; ctxEl.hidden = false;
+  const pop = ctxEl.firstElementChild, w = pop.offsetWidth, hh = pop.offsetHeight;
+  ctxEl.style.left = Math.max(8, Math.min(c.x, (+stage.dataset.w || 720) - w - 8)) + "px";
+  ctxEl.style.top = Math.max(8, Math.min(c.y, 700 - hh - 8)) + "px";
+}
+
+function render(){
+  applyTheme(); renderPanel();
+  menu.hidden = !U.open;
+  menu.className = "menu " + S.panel + (U.query.trim()?" searching":"") + (U.editing?" editing":"");
+  menu.hidden = !U.open;
+  renderRail(); renderListbar(); renderList(); renderTiles(); renderCtx(); renderControls(); renderCfg();
+}
+
+// ---- controls ----
+const SEGS = {
+  mode:[["light","Light"],["dark","Dark"]], round:[["round","Round"],["slight","Slightly round"],["square","Square"]],
+  frosted:[["on","On"],["off","Off"]], panel:[["top","Top"],["bottom","Bottom"]],
+  finish:[["frosted","Frosted"],["solid","Solid"],["outline","Outline"],["accent","Accent"]],
+  showMost:[["on","Show"],["off","Hide"]], listMode:[["az","A–Z"],["category","Category"],["folders","Folders"]], right:[["tiles","Tiles"],["favs","Favourites"],["recent","Recent"]], zoom:[["fit","Fit"],["full","100%"]]
+};
+function renderControls(){
+  document.querySelectorAll(".seg[data-key]").forEach(el => { const k = el.dataset.key;
+    el.innerHTML = SEGS[k].map(([v,l])=>`<button type="button" data-set="${k}" data-v="${v}" aria-pressed="${S[k]===v}">${l}</button>`).join(""); });
+  $("swatches").innerHTML = Object.entries(ACCENTS).map(([k,c])=>`<button type="button" data-set="accent" data-v="${k}" aria-pressed="${S.accent===k}" title="${pretty(k)}" aria-label="${pretty(k)} accent" style="background:${c}"></button>`).join("");
+}
+
+function cfgText(){
+  const lines = [
+    "# Start Menu layout from the mockup",
+    `# Tried with: ${S.mode} mode, ${S.accent} accent, ${S.round} corners, frost ${S.frosted}, panel ${S.panel}`,
+    `finish = "${S.finish}"`, `show_most_used = ${S.showMost==="on"}`, `list_mode = "${S.listMode}"  # az | category | folders`, `right_side = "${S.right}"  # tiles | favs | recent`, ""
+  ];
+  for (const g of S.groups){
+    lines.push("[[group]]", `name = "${g.name.replace(/"/g,'\\"')}"`, "tiles = [");
+    for (const t of g.tiles) lines.push(`  { app = "${t.app}", size = "${t.size}" },  # ${BYID.get(t.app)?.name ?? "?"}`);
+    lines.push("]", "");
+  }
+  return lines.join("\n");
+}
+function renderCfg(){ $("cfgText").value = cfgText(); }
+
+// ---- scaling the stage to the column ----
+function fit(){
+  const wrap = $("stageWrap"), box = $("stageBox");
+  const avail = wrap.clientWidth;
+  const s = S.zoom === "fit" ? Math.min(1, avail / 720) : 1;
+  const w = Math.max(720, Math.floor(avail / s));
+  stage.style.width = w + "px"; stage.dataset.w = w;
+  stage.style.transform = `scale(${s})`; stage.dataset.scale = s;
+  box.style.width = (w*s) + "px"; box.style.height = (700*s) + "px";
+}
+new ResizeObserver(fit).observe($("stageWrap"));
+
+// ---- toast ----
+let tt; function toast(msg){ toastEl.textContent = msg; toastEl.hidden = false; clearTimeout(tt); tt = setTimeout(()=>toastEl.hidden = true, 2200); }
+
+// ---- actions ----
+function launch(id){ const a = BYID.get(id); if (!a) return; S.counts[id] = (S.counts[id]||0) + 1; S.recent = [id, ...S.recent.filter(x=>x!==id)].slice(0,16); save();
+  toast(`Would open ${a.name}`); U.open = false; U.query = ""; q.value = ""; U.ctx = null; U.power = false; U.letters = false; render(); }
+function stagePoint(ev){ const r = stage.getBoundingClientRect(), s = +stage.dataset.scale || 1; return {x:(ev.clientX - r.left)/s, y:(ev.clientY - r.top)/s}; }
+function openCtx(el, ev){
+  const p = stagePoint(ev);
+  if (el.dataset.ctx === "app") U.ctx = {type:"app", id:el.dataset.id, x:p.x, y:p.y};
+  else U.ctx = {type:"tile", id:el.dataset.id, g:+el.dataset.g, i:+el.dataset.i, x:p.x, y:p.y};
+  U.power = false; renderCtx();
+}
+
+stage.addEventListener("click", ev => {
+  if (suppressClick){ suppressClick = false; ev.preventDefault(); return; }
+  const el = ev.target.closest("[data-act]");
+  if (U.ctx && !ev.target.closest("#ctx")){ U.ctx = null; renderCtx(); if (!el || el.dataset.ctx) return; }
+  if (U.rightMenu && (!el || !['rightmenu','setright'].includes(el.dataset.act))){ U.rightMenu = false; renderTiles(); if (!el) return; }
+  if (U.modeMenu && (!el || !['modemenu','setmode'].includes(el.dataset.act))){ U.modeMenu = false; renderListbar(); if (!el) return; }
+  if (!el){ if (U.power){ U.power = false; renderRail(); } if (U.letters && !ev.target.closest(".letters")){ U.letters=false; renderList(); } return; }
+  const a = el.dataset.act;
+  switch (a){
+    case "toggle": U.open = !U.open; U.query=""; q.value=""; U.sel=0; U.ctx=null; U.power=false; U.letters=false; render(); if (U.open) q.focus({preventScroll:true}); break;
+    case "launch": launch(el.dataset.id); break;
+    case "tile":
+      if (U.editing){
+        const g = +el.dataset.g, i = +el.dataset.i;
+        if (!U.pick) U.pick = {g,i};
+        else if (U.pick.g===g && U.pick.i===i) U.pick = null;
+        else { moveTile(U.pick.g, U.pick.i, g, i); U.pick = null; save(); }
+        renderTiles(); renderCfg();
+      } else launch(el.dataset.id);
+      break;
+    case "powermenu": U.power = !U.power; renderRail(); break;
+    case "power": toast(el.dataset.l==="Lock"||el.dataset.l==="Sleep" ? `Would ${el.dataset.l.toLowerCase()} now` : `Would show COSMIC's ${el.dataset.l.toLowerCase()} dialog`); U.power=false; renderRail(); break;
+    case "osd": toast(`Would open ${el.dataset.l}`); break;
+    case "letters": U.letters = true; renderList(); break;
+    case "rightmenu": U.rightMenu = !U.rightMenu; renderTiles(); break;
+    case "setright": S.right = el.dataset.v; U.rightMenu = false; save(); render(); break;
+    case "fav": if (!S.favs.includes(el.dataset.id)) S.favs.push(el.dataset.id); U.ctx=null; save(); render(); toast("Added to favourites (and the dock)"); break;
+    case "unfav": S.favs = S.favs.filter(x=>x!==el.dataset.id); U.ctx=null; save(); render(); break;
+    case "modemenu": U.modeMenu = !U.modeMenu; renderListbar(); break;
+    case "setmode": S.listMode = el.dataset.v; U.modeMenu = false; U.letters = false; save(); list.scrollTop = 0; render(); break;
+    case "folder": { const f = +el.dataset.f; U.openFolders.has(f) ? U.openFolders.delete(f) : U.openFolders.add(f); renderList(); break; }
+    case "jump": { U.letters = false; renderList(); const t = $("L-" + slug(el.dataset.l)); if (t) list.scrollTop = t.offsetTop - 2; break; }
+    case "edit": U.editing = !U.editing; U.pick = null; renderTiles(); break;
+    case "dropend": if (U.pick){ moveTile(U.pick.g,U.pick.i,+el.dataset.g,Infinity); U.pick=null; save(); renderTiles(); renderCfg(); } break;
+    case "dropnew": if (U.pick){ S.groups.push({name:"New group",tiles:[]}); moveTile(U.pick.g,U.pick.i,S.groups.length-1,0); U.pick=null; save(); renderTiles(); renderCfg(); } break;
+    case "addgroup": S.groups.push({name:"New group",tiles:[]}); save(); renderTiles(); renderCfg(); break;
+    case "delgroup": removeGroup(+el.dataset.g); U.pick=null; save(); renderTiles(); renderCfg(); break;
+    case "pin": pin(el.dataset.id); U.ctx=null; save(); render(); toast("Pinned to Start"); break;
+    case "unpin": unpin(el.dataset.id); U.ctx=null; save(); render(); break;
+    case "action": toast(`Would run “${el.dataset.l}” in ${BYID.get(el.dataset.id).name}`); U.ctx=null; renderCtx(); break;
+    case "resize": S.groups[U.ctx.g].tiles[U.ctx.i].size = el.dataset.s; U.ctx=null; save(); renderTiles(); renderCtx(); renderCfg(); break;
+    case "moveto": moveTile(U.ctx.g,U.ctx.i,+el.dataset.g,Infinity); U.ctx=null; save(); renderTiles(); renderCtx(); renderCfg(); break;
+    case "movenew": S.groups.push({name:"New group",tiles:[]}); moveTile(U.ctx.g,U.ctx.i,S.groups.length-1,0); U.ctx=null; save(); renderTiles(); renderCtx(); renderCfg(); break;
+  }
+});
+stage.addEventListener("input", ev => { const el = ev.target; if (el.dataset && el.dataset.act==="rename"){ S.groups[+el.dataset.g].name = el.value; save(); renderCfg(); } });
+
+// right-click and long-press
+stage.addEventListener("contextmenu", ev => { const el = ev.target.closest("[data-ctx]"); if (!el || U.editing) return; ev.preventDefault(); openCtx(el, ev); });
+let lp, suppressClick = false;
+stage.addEventListener("pointerdown", ev => { if (ev.pointerType==="mouse") return; const el = ev.target.closest("[data-ctx]"); if (!el || U.editing) return;
+  clearTimeout(lp); lp = setTimeout(()=>{ suppressClick = true; openCtx(el, ev); }, 480); });
+["pointerup","pointercancel","pointermove"].forEach(t => stage.addEventListener(t, ev => { if (t==="pointermove" && Math.abs(ev.movementX)+Math.abs(ev.movementY) < 4) return; clearTimeout(lp); }));
+
+// search + keyboard
+q.addEventListener("input", () => { U.query = q.value; U.sel = 0; U.letters = false; renderListbar(); renderList(); });
+document.addEventListener("keydown", ev => {
+  if (!U.open) return;
+  const inField = ev.target.matches("input, textarea") && ev.target !== q;
+  if (inField) return;
+  if (ev.key === "Escape"){ if (U.ctx){ U.ctx=null; renderCtx(); } else if (U.query){ U.query=""; q.value=""; renderListbar(); renderList(); } else { U.open=false; render(); } ev.preventDefault(); return; }
+  if (U.query.trim() && (ev.key==="ArrowDown"||ev.key==="ArrowUp")){ U.sel = Math.max(0, U.sel + (ev.key==="ArrowDown"?1:-1)); renderList(); ev.preventDefault(); return; }
+  if (U.query.trim() && ev.key==="Enter"){ const h = rank(U.query); if (h.length) launch(APPS[h[Math.min(U.sel,h.length-1)]].id); ev.preventDefault(); return; }
+  if (ev.target !== q && ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey && stage.matches(":hover")){ q.focus({preventScroll:true}); }
+});
+
+// side controls
+document.querySelector(".panel-side").addEventListener("click", ev => {
+  const b = ev.target.closest("[data-set]"); if (!b) return;
+  S[b.dataset.set] = b.dataset.v; save(); render(); if (b.dataset.set==="zoom") fit();
+});
+$("reset").addEventListener("click", () => { S = DEFAULTS(); Object.assign(U,{open:true,query:"",sel:0,letters:false,power:false,ctx:null,editing:false,pick:null}); q.value=""; save(); render(); fit(); toast("Mockup reset"); });
+$("copyCfg").addEventListener("click", () => {
+  const txt = cfgText();
+  const fallback = () => { const box = $("cfgBox"); box.open = true; const ta = $("cfgText"); ta.focus(); ta.select(); };
+  try { navigator.clipboard.writeText(txt).then(()=>{ $("copyCfg").textContent = "Copied — paste it to Claude"; setTimeout(()=>$("copyCfg").textContent="Copy layout",2500); }, fallback); } catch(e){ fallback(); }
+});
+
+render(); fit();
+setInterval(renderPanel, 30000);
+})();
+</script>
