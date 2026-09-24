@@ -75,6 +75,7 @@ pub enum Message {
     PowerMenu(bool),
     Power(Power),
     ShowError(String),
+    OpenSettings,
     Query(String),
     SearchKey(Key),
     Submit,
@@ -469,6 +470,11 @@ impl Application for App {
                 Task::none()
             }
             Message::RemoveGroup(g) => self.edit(|c| c.remove_group(g)),
+            Message::OpenSettings => {
+                crate::settings::open_window();
+                // A window over the popup would leave it orphaned beneath.
+                self.close_popup()
+            }
             Message::ShowError(e) => {
                 self.error = Some(e);
                 Task::none()
@@ -510,10 +516,14 @@ impl Application for App {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        self.core
+        let button = self
+            .core
             .applet
             .icon_button("start-here-symbolic")
-            .on_press(Message::TogglePopup)
+            .on_press(Message::TogglePopup);
+        // Right-click opens Settings, as other panel items do.
+        mouse_area(button)
+            .on_right_press(Message::OpenSettings)
             .into()
     }
 

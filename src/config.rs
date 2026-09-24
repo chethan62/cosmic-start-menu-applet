@@ -93,7 +93,8 @@ pub fn parse_favorites(ron: &str) -> Vec<String> {
     t.split('"').skip(1).step_by(2).map(str::to_owned).collect()
 }
 
-fn favorites_file() -> Option<String> {
+/// The dock's favourites file, raw.
+pub fn favorites_text() -> Option<String> {
     let p = dirs::config_dir()?.join("cosmic/com.system76.CosmicAppList/v1/favorites");
     std::fs::read_to_string(p).ok()
 }
@@ -148,7 +149,7 @@ impl Config {
     /// Load from the real path, seeding (and saving) on first run.
     pub fn load() -> Config {
         let installed: Vec<String> = crate::apps::load_all().into_iter().map(|a| a.id).collect();
-        let favorites = favorites_file();
+        let favorites = favorites_text();
         match Self::path() {
             Some(p) => Self::load_from(&p, &installed, favorites.as_deref()),
             None => Self::seeded(&installed, favorites.as_deref()),

@@ -23,6 +23,7 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", rev = "ef490df50b0a05
     "desktop",
     "desktop-systemd-scope",
 ] }
+futures = "0.3"
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 tokio = { version = "1", features = ["time", "process", "rt", "fs"] }
 serde = { version = "1", features = ["derive"] }

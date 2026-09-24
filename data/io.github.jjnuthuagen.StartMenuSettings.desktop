@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Start Menu Settings
+Comment=Choose how the Start Menu looks
+Exec=cosmic-start-menu-applet --settings
+Icon=start-here-symbolic
+Terminal=false
+Type=Application
+# Reached by right-clicking the panel button. It exists so the window has an
+# icon: COSMIC matches a toplevel's app id to a desktop file.
+NoDisplay=true
+Categories=COSMIC;Settings;
+StartupWMClass=io.github.jjnuthuagen.StartMenuSettings
