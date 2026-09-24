@@ -20,6 +20,15 @@ use crate::ui::{
     ROW_HEIGHT,
 };
 
+/// A fixed-height button lays its content out from the top; this centres it
+/// vertically so icon and text sit on the row's midline.
+fn centred<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content)
+        .height(Length::Fill)
+        .align_y(Alignment::Center)
+        .into()
+}
+
 pub fn app_row<'a>(app: &'a App, index: usize, selected: bool) -> Element<'a, Message> {
     let body = row::with_children(vec![
         icon(app.icon.as_cosmic_icon()).size(ICON).into(),
@@ -29,7 +38,7 @@ pub fn app_row<'a>(app: &'a App, index: usize, selected: bool) -> Element<'a, Me
     ])
     .spacing(12)
     .align_y(Alignment::Center);
-    let body = button::custom(body)
+    let body = button::custom(centred(body))
         .class(if selected {
             selected_button()
         } else {
@@ -53,7 +62,7 @@ pub fn section_label<'a>(label: String) -> Element<'a, Message> {
 }
 
 pub fn letter_header<'a>(letter: char) -> Element<'a, Message> {
-    button::custom(text::heading(letter.to_string()))
+    button::custom(centred(text::heading(letter.to_string())))
         .class(quiet_button())
         .padding([0, 10])
         .height(Length::Fixed(HEADER_HEIGHT))
@@ -196,7 +205,7 @@ pub fn list_bar<'a>(mode: ListMode, menu_open: bool) -> Element<'a, Message> {
 }
 
 fn category_header<'a>(key: &'static str) -> Element<'a, Message> {
-    button::custom(text::heading(fl!(key)))
+    button::custom(centred(text::heading(fl!(key))))
         .class(quiet_button())
         .padding([0, 10])
         .height(Length::Fixed(HEADER_HEIGHT))
@@ -234,7 +243,7 @@ fn folder_row<'a>(index: usize, folder: &'a Folder, open: bool) -> Element<'a, M
     ])
     .spacing(12)
     .align_y(Alignment::Center);
-    button::custom(body)
+    button::custom(centred(body))
         .class(quiet_button())
         .padding([0, 10])
         .width(Length::Fill)
