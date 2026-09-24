@@ -31,7 +31,6 @@ pub const HEADER_HEIGHT: f32 = 32.0;
 pub struct Spacing {
     pub gap: u16,
     pub pad_y: u16,
-    pub pad_x: u16,
     pub section: u16,
 }
 
@@ -41,7 +40,6 @@ impl Spacing {
         Self {
             gap: spacing.space_xxs,
             pad_y: spacing.space_xxs,
-            pad_x: spacing.space_xs,
             section: spacing.space_xs,
         }
     }
@@ -91,13 +89,6 @@ pub fn tile_radius(theme: &cosmic::Theme) -> f32 {
 /// Rows, rail buttons and menu items take the small radius.
 pub fn row_radius(theme: &cosmic::Theme) -> f32 {
     theme.cosmic().corner_radii.radius_s[0]
-}
-
-/// Half of `height`, capped by the largest radius the desktop's roundness
-/// allows: Round lets a pill through, Slightly round trims it, Square keeps it
-/// square.
-pub fn pill_radius(theme: &cosmic::Theme, height: f32) -> f32 {
-    (height / 2.0).min(theme.cosmic().corner_radii.radius_xl[0])
 }
 
 fn tile_border(theme: &cosmic::Theme, width: f32) -> Border {

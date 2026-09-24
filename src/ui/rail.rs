@@ -5,10 +5,10 @@ use cosmic::iced::{Alignment, Length, Point};
 use cosmic::widget::{button, column, container, icon, popover, row, text, tooltip, Space};
 use cosmic::Element;
 
-use crate::app::Message;
+use crate::app::{Avatar, Message};
 use crate::fl;
 use crate::session::{self, Power};
-use crate::ui::{menu_card, quiet_button, RAIL_WIDTH};
+use crate::ui::{menu_card, quiet_button, row_radius, RAIL_WIDTH};
 
 const BUTTON: f32 = 40.0;
 
@@ -49,7 +49,58 @@ fn power_menu<'a>() -> Element<'a, Message> {
         .into()
 }
 
-pub fn view<'a>(power_open: bool) -> Element<'a, Message> {
+const AVATAR: f32 = 28.0;
+
+/// Round gives a circle; Slightly round and Square give the small radius
+/// (8 px and 2 px), so the picture matches every other corner on screen.
+fn avatar_radius(theme: &cosmic::Theme) -> f32 {
+    if theme.cosmic().corner_radii.radius_xl[0] >= AVATAR / 2.0 {
+        AVATAR / 2.0
+    } else {
+        row_radius(theme)
+    }
+}
+
+fn avatar<'a>(a: &Avatar) -> Element<'a, Message> {
+    let inner: Element<'a, Message> = match &a.image {
+        Some(path) => cosmic::widget::image(path.clone())
+            .content_fit(cosmic::iced::ContentFit::Cover)
+            .width(Length::Fixed(AVATAR))
+            .height(Length::Fixed(AVATAR))
+            .into(),
+        None => text::body(a.initial.clone()).into(),
+    };
+    let has_image = a.image.is_some();
+    let face = container(inner)
+        .center(Length::Fixed(AVATAR))
+        .clip(true)
+        .class(cosmic::theme::Container::Custom(Box::new(move |theme| {
+            let cosmic = theme.cosmic();
+            cosmic::widget::container::Style {
+                background: (!has_image)
+                    .then(|| cosmic::iced::Background::Color(cosmic.accent_color().into())),
+                text_color: Some(cosmic.on_accent_color().into()),
+                border: cosmic::iced::Border {
+                    radius: avatar_radius(theme).into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        })));
+    tooltip(
+        button::custom(container(face).center(Length::Fill))
+            .class(quiet_button())
+            .padding(0)
+            .width(Length::Fixed(BUTTON))
+            .height(Length::Fixed(BUTTON))
+            .on_press(Message::OpenAccount),
+        text::body(fl!("rail-account")),
+        tooltip::Position::Right,
+    )
+    .into()
+}
+
+pub fn view<'a>(power_open: bool, account: &Avatar) -> Element<'a, Message> {
     let power = rail_button(
         "system-shutdown-symbolic",
         fl!("power"),
@@ -65,11 +116,7 @@ pub fn view<'a>(power_open: bool) -> Element<'a, Message> {
     }
 
     column::with_children(vec![
-        rail_button(
-            "avatar-default-symbolic",
-            fl!("rail-account"),
-            Message::OpenAccount,
-        ),
+        avatar(account),
         Space::new().height(Length::Fill).into(),
         rail_button("folder-symbolic", fl!("rail-files"), Message::OpenFiles),
         rail_button(

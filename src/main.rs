@@ -1,11 +1,9 @@
 //! Start Menu — a Windows 10-style Start menu for the COSMIC panel.
 
-// Modules are built bottom-up before the popup uses them; removed once it does.
-#![allow(dead_code)]
-
 mod app;
 mod apps;
 mod config;
+mod favorites;
 mod folders;
 mod i18n;
 mod launch;

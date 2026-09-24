@@ -8,7 +8,7 @@ use cosmic::widget::{column, container, mouse_area, popover, row, text, text_inp
 use cosmic::{Application, Element};
 
 use crate::apps::App as AppEntry;
-use crate::config::{Config, ListMode, TileRef, TileSize};
+use crate::config::{Config, ListMode, RightSide, TileRef, TileSize};
 use crate::fl;
 use crate::folders::Folder;
 use crate::session::Power;
@@ -41,6 +41,46 @@ pub struct App {
     loose: Vec<usize>,
     open_folders: std::collections::HashSet<usize>,
     mode_menu: bool,
+    favs: Vec<String>,
+    recent: Vec<String>,
+    right_menu: bool,
+    avatar: Avatar,
+}
+
+/// The account picture, or the initial to draw when there is none.
+#[derive(Debug, Clone, Default)]
+pub struct Avatar {
+    pub image: Option<std::path::PathBuf>,
+    pub initial: String,
+}
+
+/// AccountsService keeps the picture world-readable under the user's name;
+/// `~/.face` is the older convention. The initial comes from the account's
+/// full name, falling back to the login name.
+fn load_avatar() -> Avatar {
+    let user = std::env::var("USER").unwrap_or_default();
+    let image = [
+        std::path::PathBuf::from("/var/lib/AccountsService/icons").join(&user),
+        dirs::home_dir().unwrap_or_default().join(".face"),
+    ]
+    .into_iter()
+    .find(|p| !user.is_empty() && p.is_file());
+    let full_name = std::fs::read_to_string("/etc/passwd")
+        .ok()
+        .and_then(|passwd| {
+            passwd
+                .lines()
+                .find(|l| l.split(':').next() == Some(user.as_str()))
+                .and_then(|l| l.split(':').nth(4).map(str::to_owned))
+        })
+        .unwrap_or_default();
+    let initial = full_name
+        .chars()
+        .chain(user.chars())
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_default();
+    Avatar { image, initial }
 }
 
 /// What a right-click menu is about.
@@ -99,6 +139,11 @@ pub enum Message {
     ModeMenu(bool),
     SetListMode(ListMode),
     ToggleFolder(usize),
+    RightMenu(bool),
+    SetRightSide(RightSide),
+    AddFavourite(String),
+    RemoveFavourite(String),
+    FavouritesSaved(Vec<String>),
     /// A tile pressed in edit mode: pick it up, drop onto it, or put it back.
     TileClicked(TileRef),
     DropEnd(usize),
@@ -118,6 +163,9 @@ pub struct Loaded {
     pub config: Config,
     pub folders: Vec<Folder>,
     pub loose: Vec<usize>,
+    pub favs: Vec<String>,
+    pub recent: Vec<String>,
+    pub avatar: Avatar,
 }
 
 /// Read the app index, launch history and config. Blocking file I/O, so it
@@ -125,9 +173,11 @@ pub struct Loaded {
 fn load() -> Loaded {
     let apps = crate::apps::load_all();
     let ids: std::collections::HashSet<&str> = apps.iter().map(|a| a.id.as_str()).collect();
-    let most_used = crate::usage::Usage::path()
-        .map(|p| crate::usage::Usage::load_from(&p).top(5, &ids))
+    let usage = crate::usage::Usage::path()
+        .map(|p| crate::usage::Usage::load_from(&p))
         .unwrap_or_default();
+    let most_used = usage.top(5, &ids);
+    let recent = usage.recent(crate::usage::RECENT_CAP, &ids);
     let config = Config::load();
     let (folders, loose) = crate::folders::load(&apps);
     Loaded {
@@ -136,6 +186,9 @@ fn load() -> Loaded {
         config,
         folders,
         loose,
+        favs: crate::favorites::read(),
+        recent,
+        avatar: load_avatar(),
     }
 }
 
@@ -146,6 +199,7 @@ impl App {
         self.edit = ui::tiles::Edit::default();
         self.letter_grid = false;
         self.mode_menu = false;
+        self.right_menu = false;
         match self.popup.take() {
             Some(id) => cosmic::iced::platform_specific::shell::commands::popup::destroy_popup(id),
             None => Task::none(),
@@ -209,6 +263,26 @@ impl App {
         )
     }
 
+    /// Write the dock's favourites off-thread; the menu shows the new list
+    /// once the write has landed, so it never shows what the dock does not.
+    fn save_favourites(&mut self, list: Vec<String>) -> Task<Message> {
+        self.context = None;
+        Task::perform(
+            async move {
+                let to_write = list.clone();
+                tokio::task::spawn_blocking(move || crate::favorites::write(&to_write))
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r)
+                    .map(|()| list)
+            },
+            |r| match r {
+                Ok(list) => cosmic::action::app(Message::FavouritesSaved(list)),
+                Err(e) => cosmic::action::app(Message::ShowError(e)),
+            },
+        )
+    }
+
     fn report(&mut self, result: Result<(), String>) {
         if let Err(e) = result {
             tracing::warn!("{e}");
@@ -258,6 +332,10 @@ impl Application for App {
                 loose: Vec::new(),
                 open_folders: std::collections::HashSet::new(),
                 mode_menu: false,
+                favs: Vec::new(),
+                recent: Vec::new(),
+                right_menu: false,
+                avatar: Avatar::default(),
             },
             Task::none(),
         )
@@ -354,7 +432,13 @@ impl Application for App {
                     config,
                     folders,
                     loose,
+                    favs,
+                    recent,
+                    avatar,
                 } = *loaded;
+                self.favs = favs;
+                self.recent = recent;
+                self.avatar = avatar;
                 self.folders = folders;
                 self.loose = loose;
                 self.apps = apps;
@@ -420,6 +504,29 @@ impl Application for App {
                 let save = self.edit(|c| c.list_mode = mode);
                 let top = self.scroll_list(0.0);
                 Task::batch([save, top])
+            }
+            Message::RightMenu(open) => {
+                self.right_menu = open;
+                Task::none()
+            }
+            Message::SetRightSide(side) => {
+                self.right_menu = false;
+                if side != RightSide::Tiles {
+                    self.edit = ui::tiles::Edit::default();
+                }
+                self.edit(|c| c.right_side = side)
+            }
+            Message::AddFavourite(id) => {
+                let list = crate::favorites::with_added(&self.favs, &id);
+                self.save_favourites(list)
+            }
+            Message::RemoveFavourite(id) => {
+                let list = crate::favorites::with_removed(&self.favs, &id);
+                self.save_favourites(list)
+            }
+            Message::FavouritesSaved(list) => {
+                self.favs = list;
+                Task::none()
             }
             Message::ToggleFolder(i) => {
                 if !self.open_folders.remove(&i) {
@@ -667,12 +774,20 @@ impl Application for App {
                 ])
                 .spacing(spacing.section)
                 .into(),
-                ui::tiles::view(&self.config, &self.apps, spacing, self.edit),
+                ui::tiles::view(ui::tiles::RightView {
+                    config: &self.config,
+                    apps: &self.apps,
+                    spacing,
+                    edit: self.edit,
+                    favs: &self.favs,
+                    recent: &self.recent,
+                    menu_open: self.right_menu,
+                }),
             ])
             .spacing(12)
             .into()
         };
-        let columns = row::with_children(vec![ui::rail::view(self.power_open), main])
+        let columns = row::with_children(vec![ui::rail::view(self.power_open, &self.avatar), main])
             .spacing(12)
             .height(Length::Fill);
 
@@ -691,7 +806,7 @@ impl Application for App {
         let tracked = mouse_area(body).on_move(Message::Pointer);
         let mut with_menu = popover(tracked).on_close(Message::CloseContext);
         if let Some(ctx) = &self.context {
-            if let Some(menu) = ui::context::view(ctx, &self.apps, &self.config) {
+            if let Some(menu) = ui::context::view(ctx, &self.apps, &self.config, &self.favs) {
                 with_menu = with_menu
                     .popup(menu)
                     .position(popover::Position::Point(ctx.at));

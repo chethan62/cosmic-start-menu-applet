@@ -54,6 +54,7 @@ pub fn view<'a>(
     ctx: &Context,
     apps: &'a [App],
     config: &'a Config,
+    favs: &[String],
 ) -> Option<Element<'a, Message>> {
     let mut items: Vec<Element<'a, Message>> = Vec::new();
     match ctx.target {
@@ -70,6 +71,19 @@ pub fn view<'a>(
                     "view-pin-symbolic",
                     fl!("ctx-pin"),
                     Message::Pin(app.id.clone()),
+                )
+            });
+            items.push(if favs.contains(&app.id) {
+                item(
+                    "starred-symbolic",
+                    fl!("fav-remove"),
+                    Message::RemoveFavourite(app.id.clone()),
+                )
+            } else {
+                item(
+                    "non-starred-symbolic",
+                    fl!("fav-add"),
+                    Message::AddFavourite(app.id.clone()),
                 )
             });
             if !app.actions.is_empty() {

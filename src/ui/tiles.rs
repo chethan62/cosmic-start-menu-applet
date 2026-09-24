@@ -8,18 +8,18 @@ use std::collections::HashSet;
 
 use cosmic::desktop::IconSourceExt;
 use cosmic::iced::widget::{pin, stack};
-use cosmic::iced::{Alignment, Length};
+use cosmic::iced::{Alignment, Length, Point};
 use cosmic::widget::{
-    button, column, container, icon, mouse_area, row, scrollable, text, text_input, Space,
+    button, column, container, icon, mouse_area, popover, row, scrollable, text, text_input, Space,
 };
 use cosmic::Element;
 
 use crate::app::{Message, Target};
 use crate::apps::App;
-use crate::config::{Config, TileFinish, TileRef, TileSize};
+use crate::config::{Config, RightSide, TileFinish, TileRef, TileSize};
 use crate::fl;
 use crate::tile_layout::{self, COLUMNS};
-use crate::ui::{quiet_button, selected_button, tile_button_class, Spacing};
+use crate::ui::{menu_card, quiet_button, selected_button, tile_button_class, Spacing};
 
 /// One grid cell. Small tiles are one cell, Medium 2×2, Wide 4×2.
 pub const CELL: f32 = 44.0;
@@ -137,12 +137,136 @@ fn heading<'a>(g: usize, name: &'a str, spacing: Spacing, edit: Edit) -> Element
     .into()
 }
 
-pub fn view<'a>(
-    config: &'a Config,
-    apps: &'a [App],
-    spacing: Spacing,
-    edit: Edit,
-) -> Element<'a, Message> {
+/// Everything the right-hand column needs, borrowed from the app state.
+pub struct RightView<'a> {
+    pub config: &'a Config,
+    pub apps: &'a [App],
+    pub spacing: Spacing,
+    pub edit: Edit,
+    pub favs: &'a [String],
+    pub recent: &'a [String],
+    pub menu_open: bool,
+}
+
+fn side_key(side: RightSide) -> &'static str {
+    match side {
+        RightSide::Tiles => "right-tiles",
+        RightSide::Favourites => "right-favourites",
+        RightSide::Recent => "right-recent",
+    }
+}
+
+/// The "Tiles ▾" switch at the top of the column.
+fn side_switch<'a>(side: RightSide, open: bool) -> Element<'a, Message> {
+    let label = row::with_children(vec![
+        text::body(fl!(side_key(side))).into(),
+        icon::from_name("pan-down-symbolic").size(12).into(),
+    ])
+    .spacing(4)
+    .align_y(Alignment::Center);
+    let switch = button::custom(label)
+        .class(quiet_button())
+        .padding([4, 10])
+        .on_press(Message::RightMenu(!open));
+    let mut switch = popover(switch)
+        .position(popover::Position::Point(Point::new(0.0, 30.0)))
+        .on_close(Message::RightMenu(false));
+    if open {
+        let items = [RightSide::Tiles, RightSide::Favourites, RightSide::Recent].map(|m| {
+            button::custom(
+                row::with_children(vec![
+                    text::body(fl!(side_key(m))).into(),
+                    Space::new().width(Length::Fill).into(),
+                    if m == side {
+                        icon::from_name("object-select-symbolic").size(14).into()
+                    } else {
+                        Space::new().width(14).into()
+                    },
+                ])
+                .align_y(Alignment::Center),
+            )
+            .class(quiet_button())
+            .padding([7, 10])
+            .width(Length::Fill)
+            .on_press(Message::SetRightSide(m))
+            .into()
+        });
+        switch = switch.popup(
+            container(column::with_children(items.into_iter().collect::<Vec<_>>()).spacing(1))
+                .padding(6)
+                .width(Length::Fixed(170.0))
+                .class(menu_card()),
+        );
+    }
+    switch.into()
+}
+
+/// Favourites or Recent: four across, icon over name, at most 16.
+fn app_grid<'a>(ids: &[String], apps: &'a [App], note: String) -> Element<'a, Message> {
+    let found: Vec<(usize, &'a App)> = ids
+        .iter()
+        .filter_map(|id| apps.iter().enumerate().find(|(_, a)| &a.id == id))
+        .take(16)
+        .collect();
+    let mut col = column::with_capacity(6).spacing(4);
+    if found.is_empty() {
+        col = col.push(container(text::body(fl!("nothing-yet"))).padding([12, 2]));
+    }
+    for chunk in found.chunks(4) {
+        let mut r = row::with_capacity(4).spacing(4);
+        for &(i, app) in chunk {
+            let cell = button::custom(
+                column::with_children(vec![
+                    icon(app.icon.as_cosmic_icon()).size(40).into(),
+                    text::caption(&app.name)
+                        .wrapping(cosmic::iced::widget::text::Wrapping::None)
+                        .into(),
+                ])
+                .spacing(6)
+                .align_x(Alignment::Center),
+            )
+            .class(quiet_button())
+            .padding([10, 4, 8, 4])
+            .width(Length::Fill)
+            .on_press(Message::Launch(i));
+            r = r.push(mouse_area(cell).on_right_press(Message::OpenContext(Target::App(i))));
+        }
+        for _ in chunk.len()..4 {
+            r = r.push(Space::new().width(Length::Fill));
+        }
+        col = col.push(r);
+    }
+    col = col.push(container(text::caption(note)).padding([8, 2]));
+    scrollable(col).height(Length::Fill).into()
+}
+
+pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
+    let RightView {
+        config,
+        apps,
+        spacing,
+        edit,
+        favs,
+        recent,
+        menu_open,
+    } = v;
+    let switch = side_switch(config.right_side, menu_open);
+    let width = Length::Fixed(grid_width(spacing) + 12.0);
+    match config.right_side {
+        RightSide::Tiles => {}
+        RightSide::Favourites => {
+            return column::with_children(vec![switch, app_grid(favs, apps, fl!("fav-note"))])
+                .spacing(spacing.gap)
+                .width(width)
+                .into();
+        }
+        RightSide::Recent => {
+            return column::with_children(vec![switch, app_grid(recent, apps, fl!("recent-note"))])
+                .spacing(spacing.gap)
+                .width(width)
+                .into();
+        }
+    }
     let gap = f32::from(spacing.gap);
     let installed: HashSet<&str> = apps.iter().map(|a| a.id.as_str()).collect();
     let mut groups = column::with_capacity(config.groups.len() * 2).spacing(spacing.gap);
@@ -210,9 +334,14 @@ pub fn view<'a>(
     .on_press(Message::ToggleEdit);
 
     column::with_children(vec![
-        row::with_children(vec![Space::new().width(Length::Fill).into(), toggle.into()]).into(),
+        row::with_children(vec![
+            switch,
+            Space::new().width(Length::Fill).into(),
+            toggle.into(),
+        ])
+        .into(),
         scrollable(groups).height(Length::Fill).into(),
     ])
-    .width(Length::Fixed(grid_width(spacing) + 12.0))
+    .width(width)
     .into()
 }
