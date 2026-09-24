@@ -19,6 +19,17 @@ use crate::ui::{self, Spacing};
 pub const POPUP_WIDTH: f32 = 680.0;
 pub const POPUP_HEIGHT: f32 = 600.0;
 
+/// The popup's size, for both the Wayland positioner and libcosmic's popup
+/// frame. The frame (`popup_container`) clamps to 360 wide by default, which
+/// is a Control-Center-sized popup; left alone it hides the tile column.
+fn popup_limits() -> Limits {
+    Limits::NONE
+        .min_width(POPUP_WIDTH)
+        .max_width(POPUP_WIDTH)
+        .min_height(POPUP_HEIGHT)
+        .max_height(POPUP_HEIGHT)
+}
+
 pub struct App {
     core: Core,
     popup: Option<Id>,
@@ -432,11 +443,7 @@ impl Application for App {
                     None,
                     None,
                 );
-                settings.positioner.size_limits = Limits::NONE
-                    .min_width(POPUP_WIDTH)
-                    .max_width(POPUP_WIDTH)
-                    .min_height(POPUP_HEIGHT)
-                    .max_height(POPUP_HEIGHT);
+                settings.positioner.size_limits = popup_limits();
                 let popup =
                     cosmic::iced::platform_specific::shell::commands::popup::get_popup(settings);
 
@@ -900,7 +907,11 @@ impl Application for App {
                     .position(popover::Position::Point(ctx.at));
             }
         }
-        self.core.applet.popup_container(with_menu).into()
+        self.core
+            .applet
+            .popup_container(with_menu)
+            .limits(popup_limits())
+            .into()
     }
 }
 
@@ -973,6 +984,16 @@ mod tests {
             }),
             Escape::LeaveEdit
         );
+    }
+
+    #[test]
+    fn popup_frame_is_as_wide_as_the_menu() {
+        // libcosmic's popup_container clamps every applet popup to 360 wide
+        // unless told otherwise, which cut the tile column off entirely.
+        let max = popup_limits().max();
+        assert_eq!(max.width, POPUP_WIDTH);
+        assert_eq!(popup_limits().min().width, POPUP_WIDTH);
+        assert!(max.height >= POPUP_HEIGHT);
     }
 
     #[test]
