@@ -46,7 +46,7 @@ pub fn parse(ron_text: &str) -> Vec<RawFolder> {
 
 fn matches(filter: &Filter, app: &App) -> bool {
     match filter {
-        Filter::AppIds(ids) => ids.iter().any(|id| *id == app.id),
+        Filter::AppIds(ids) => ids.contains(&app.id),
         Filter::Categories {
             categories,
             exclude,
