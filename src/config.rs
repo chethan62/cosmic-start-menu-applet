@@ -25,6 +25,31 @@ pub enum TileFinish {
     Frosted,
     Solid,
     Outline,
+    /// Filled with the accent colour, like classic Windows 10 tiles.
+    Accent,
+}
+
+/// How the middle column organises apps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ListMode {
+    #[default]
+    Az,
+    Category,
+    /// The folders from COSMIC's App Library.
+    Folders,
+}
+
+/// What the right-hand column shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RightSide {
+    #[default]
+    Tiles,
+    /// The dock's favourites, as a plain grid.
+    Favourites,
+    /// Recently launched apps, as a plain grid.
+    Recent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +76,8 @@ pub struct Group {
 pub struct Config {
     pub finish: TileFinish,
     pub show_most_used: bool,
+    pub list_mode: ListMode,
+    pub right_side: RightSide,
     #[serde(rename = "group")]
     pub groups: Vec<Group>,
 }
@@ -60,6 +87,8 @@ impl Default for Config {
         Self {
             finish: TileFinish::Frosted,
             show_most_used: true,
+            list_mode: ListMode::Az,
+            right_side: RightSide::Tiles,
             groups: Vec::new(),
         }
     }
@@ -81,6 +110,7 @@ const HEADER: &str = "\
 # Start Menu configuration. Written by the menu and its Settings window;
 # safe to edit by hand. `app` is a desktop-entry id without `.desktop`.
 # `size` is small | medium | wide. `source` is reserved for live tiles.
+# `list_mode` is az | category | folders; `right_side` is tiles | favourites | recent.
 ";
 
 /// The dock's favourites file is a RON list of strings. Pull the quoted
@@ -319,6 +349,22 @@ mod tests {
 
     fn ids(g: &Group) -> Vec<&str> {
         g.tiles.iter().map(|t| t.app.as_str()).collect()
+    }
+
+    #[test]
+    fn new_modes_default_and_round_trip() {
+        let c: Config = toml::from_str("").unwrap();
+        assert_eq!(
+            (c.list_mode, c.right_side),
+            (ListMode::Az, RightSide::Tiles)
+        );
+        let c: Config =
+            toml::from_str("list_mode = \"folders\"\nright_side = \"recent\"\nfinish = \"accent\"")
+                .unwrap();
+        assert_eq!(
+            (c.list_mode, c.right_side, c.finish),
+            (ListMode::Folders, RightSide::Recent, TileFinish::Accent)
+        );
     }
 
     #[test]

@@ -44,3 +44,4 @@ settings-cancel = Cancel
 settings-saved = Changes apply the next time you open the menu.
 settings-save-failed = Couldn’t save: { $reason }
 close = Close
+finish-accent = Accent

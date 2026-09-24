@@ -66,7 +66,7 @@ const FROSTED_TILE_ALPHA: f32 = 0.68;
 /// Fill and edge width for a finish. One place, so a button tile and a
 /// container tile cannot disagree about what "frosted" means.
 fn finish_paint(
-    _theme: &cosmic::Theme,
+    theme: &cosmic::Theme,
     finish: TileFinish,
     fill: cosmic::cosmic_theme::palette::Srgba,
 ) -> (Option<Color>, f32) {
@@ -78,6 +78,7 @@ fn finish_paint(
             (Some(Color::from(fill)), 0.0)
         }
         TileFinish::Outline => (None, 1.0),
+        TileFinish::Accent => (Some(Color::from(theme.cosmic().accent_color())), 0.0),
     }
 }
 
@@ -132,8 +133,12 @@ pub fn tile_button_class(finish: TileFinish) -> button::ButtonClass {
             border_radius: border.radius,
             border_width: border.width,
             border_color: border.color,
-            text_color: None,
-            icon_color: None,
+            // Accent is the one finish with its own foreground: text on the
+            // accent fill must use the theme's on-accent colour to stay legible.
+            text_color: (finish == TileFinish::Accent)
+                .then(|| Color::from(theme.cosmic().on_accent_color())),
+            icon_color: (finish == TileFinish::Accent)
+                .then(|| Color::from(theme.cosmic().on_accent_color())),
             ..button::Style::new()
         }
     }

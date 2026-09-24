@@ -10,7 +10,12 @@ use serde::{Deserialize, Serialize};
 pub struct Usage {
     #[serde(default)]
     pub counts: BTreeMap<String, u32>,
+    /// Most recent launch first, at most `RECENT_CAP`.
+    #[serde(default)]
+    pub recent: Vec<String>,
 }
+
+pub const RECENT_CAP: usize = 16;
 
 impl Usage {
     pub fn path() -> Option<PathBuf> {
@@ -46,6 +51,19 @@ impl Usage {
     pub fn record(&mut self, app: &str) {
         let n = self.counts.entry(app.to_owned()).or_insert(0);
         *n = n.saturating_add(1);
+        self.recent.retain(|a| a != app);
+        self.recent.insert(0, app.to_owned());
+        self.recent.truncate(RECENT_CAP);
+    }
+
+    /// Up to `n` recently launched installed apps, newest first.
+    pub fn recent(&self, n: usize, installed: &HashSet<&str>) -> Vec<String> {
+        self.recent
+            .iter()
+            .filter(|a| installed.contains(a.as_str()))
+            .take(n)
+            .cloned()
+            .collect()
     }
 
     /// The `n` most launched installed apps; ties by id so the order is stable.
@@ -84,6 +102,30 @@ mod tests {
         assert_eq!(Usage::load_from(&p), u);
         std::fs::write(&p, "counts = 3").unwrap();
         assert_eq!(Usage::load_from(&p), Usage::default());
+    }
+
+    #[test]
+    fn recent_is_newest_first_deduped_and_capped() {
+        let mut u = Usage::default();
+        for i in 0..20 {
+            u.record(&format!("app{i}"));
+        }
+        u.record("app5");
+        assert_eq!(u.recent.len(), RECENT_CAP);
+        assert_eq!(u.recent[0], "app5");
+        assert_eq!(u.recent.iter().filter(|a| *a == "app5").count(), 1);
+        let inst: HashSet<&str> = ["app5", "app19"].into();
+        assert_eq!(u.recent(8, &inst), ["app5", "app19"]);
+    }
+
+    #[test]
+    fn old_usage_files_without_recent_still_load() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("usage.toml");
+        std::fs::write(&p, "[counts]\nfirefox = 3\n").unwrap();
+        let u = Usage::load_from(&p);
+        assert_eq!(u.counts["firefox"], 3);
+        assert!(u.recent.is_empty());
     }
 
     #[test]

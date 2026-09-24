@@ -119,6 +119,7 @@ impl Application for Settings {
             (TileFinish::Frosted, "finish-frosted"),
             (TileFinish::Solid, "finish-solid"),
             (TileFinish::Outline, "finish-outline"),
+            (TileFinish::Accent, "finish-accent"),
         ] {
             finish = finish.push(radio(
                 text::body(fl!(key)),
