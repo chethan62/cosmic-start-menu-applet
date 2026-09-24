@@ -205,8 +205,16 @@ pub fn letter(name: &str) -> char {
 
 /// Group `apps` (already sorted) under their letters, `#` first.
 pub fn sections(apps: &[App]) -> Vec<(char, Vec<usize>)> {
+    let all: Vec<usize> = (0..apps.len()).collect();
+    sections_of(apps, &all)
+}
+
+/// Like [`sections`], over only the apps at `indices` — the Folders view's
+/// apps that are in no folder.
+pub fn sections_of(apps: &[App], indices: &[usize]) -> Vec<(char, Vec<usize>)> {
     let mut out: Vec<(char, Vec<usize>)> = Vec::new();
-    for (i, app) in apps.iter().enumerate() {
+    for &i in indices {
+        let Some(app) = apps.get(i) else { continue };
         let l = letter(&app.name);
         match out.iter_mut().find(|(c, _)| *c == l) {
             Some((_, v)) => v.push(i),
@@ -298,6 +306,17 @@ mod tests {
             "cat-graphics"
         );
         assert_eq!(category_of(&mk(&["COSMIC"])), "cat-other");
+    }
+
+    #[test]
+    fn sections_of_a_subset_only_lists_those_apps() {
+        let mk = |n: &str| App {
+            name: n.into(),
+            ..App::default()
+        };
+        let apps = vec![mk("Alacritty"), mk("Blender"), mk("btop"), mk("Calc")];
+        let s = sections_of(&apps, &[0, 2, 3]);
+        assert_eq!(s, [('A', vec![0]), ('B', vec![2]), ('C', vec![3])]);
     }
 
     #[test]

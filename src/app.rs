@@ -8,8 +8,9 @@ use cosmic::widget::{column, container, mouse_area, popover, row, text, text_inp
 use cosmic::{Application, Element};
 
 use crate::apps::App as AppEntry;
-use crate::config::{Config, TileRef, TileSize};
+use crate::config::{Config, ListMode, TileRef, TileSize};
 use crate::fl;
+use crate::folders::Folder;
 use crate::session::Power;
 use crate::ui::{self, Spacing};
 
@@ -36,6 +37,10 @@ pub struct App {
     edit: ui::tiles::Edit,
     letter_grid: bool,
     list_id: cosmic::widget::Id,
+    folders: Vec<Folder>,
+    loose: Vec<usize>,
+    open_folders: std::collections::HashSet<usize>,
+    mode_menu: bool,
 }
 
 /// What a right-click menu is about.
@@ -90,6 +95,10 @@ pub enum Message {
     RunAction(usize, usize),
     ToggleEdit,
     JumpTo(char),
+    JumpToCategory(&'static str),
+    ModeMenu(bool),
+    SetListMode(ListMode),
+    ToggleFolder(usize),
     /// A tile pressed in edit mode: pick it up, drop onto it, or put it back.
     TileClicked(TileRef),
     DropEnd(usize),
@@ -107,6 +116,8 @@ pub struct Loaded {
     pub apps: Vec<AppEntry>,
     pub most_used: Vec<String>,
     pub config: Config,
+    pub folders: Vec<Folder>,
+    pub loose: Vec<usize>,
 }
 
 /// Read the app index, launch history and config. Blocking file I/O, so it
@@ -118,10 +129,13 @@ fn load() -> Loaded {
         .map(|p| crate::usage::Usage::load_from(&p).top(5, &ids))
         .unwrap_or_default();
     let config = Config::load();
+    let (folders, loose) = crate::folders::load(&apps);
     Loaded {
         apps,
         most_used,
         config,
+        folders,
+        loose,
     }
 }
 
@@ -131,6 +145,7 @@ impl App {
         self.context = None;
         self.edit = ui::tiles::Edit::default();
         self.letter_grid = false;
+        self.mode_menu = false;
         match self.popup.take() {
             Some(id) => cosmic::iced::platform_specific::shell::commands::popup::destroy_popup(id),
             None => Task::none(),
@@ -151,6 +166,45 @@ impl App {
             |r| match r {
                 Ok(()) => cosmic::action::none(),
                 Err(e) => cosmic::action::app(Message::ShowError(e)),
+            },
+        )
+    }
+
+    /// Height of the Most used block at the top of the list, if shown.
+    fn most_used_height(&self) -> f32 {
+        if !self.config.show_most_used {
+            return 0.0;
+        }
+        let rows = self
+            .usage_top
+            .iter()
+            .filter(|id| self.apps.iter().any(|a| &a.id == *id))
+            .count();
+        if rows == 0 {
+            0.0
+        } else {
+            ui::HEADER_HEIGHT + rows as f32 * ui::ROW_HEIGHT
+        }
+    }
+
+    /// Height of the Folders block: its label, one row per folder, and the
+    /// apps of any folder that is open.
+    fn folders_height(&self) -> f32 {
+        let open: usize = self
+            .open_folders
+            .iter()
+            .filter_map(|&i| self.folders.get(i))
+            .map(|f| f.apps.len())
+            .sum();
+        ui::HEADER_HEIGHT + (self.folders.len() + open) as f32 * ui::ROW_HEIGHT
+    }
+
+    fn scroll_list(&self, y: f32) -> Task<Message> {
+        cosmic::iced::widget::scrollable::scroll_to(
+            self.list_id.clone(),
+            cosmic::iced::widget::scrollable::AbsoluteOffset {
+                x: None,
+                y: Some(y),
             },
         )
     }
@@ -200,6 +254,10 @@ impl Application for App {
                 edit: ui::tiles::Edit::default(),
                 letter_grid: false,
                 list_id: cosmic::widget::Id::new("start-menu-list"),
+                folders: Vec::new(),
+                loose: Vec::new(),
+                open_folders: std::collections::HashSet::new(),
+                mode_menu: false,
             },
             Task::none(),
         )
@@ -294,7 +352,11 @@ impl Application for App {
                     apps,
                     most_used,
                     config,
+                    folders,
+                    loose,
                 } = *loaded;
+                self.folders = folders;
+                self.loose = loose;
                 self.apps = apps;
                 self.usage_top = most_used;
                 self.config = config;
@@ -318,28 +380,52 @@ impl Application for App {
             }
             Message::JumpTo(letter) => {
                 self.letter_grid = false;
-                let most_used = if self.config.show_most_used {
-                    self.usage_top
-                        .iter()
-                        .filter(|id| self.apps.iter().any(|a| &a.id == *id))
-                        .count()
-                } else {
-                    0
+                let (sections, prefix) = match self.config.list_mode {
+                    ListMode::Folders if !self.folders.is_empty() => (
+                        crate::apps::sections_of(&self.apps, &self.loose),
+                        self.most_used_height() + self.folders_height(),
+                    ),
+                    _ => (crate::apps::sections(&self.apps), self.most_used_height()),
                 };
-                let y = ui::app_list::offset_of(
-                    &crate::apps::sections(&self.apps),
-                    most_used,
-                    &letter,
-                    ui::ROW_HEIGHT,
-                    ui::HEADER_HEIGHT,
-                );
-                cosmic::iced::widget::scrollable::scroll_to(
-                    self.list_id.clone(),
-                    cosmic::iced::widget::scrollable::AbsoluteOffset {
-                        x: None,
-                        y: Some(y),
-                    },
+                self.scroll_list(
+                    prefix
+                        + ui::app_list::offset_of(
+                            &sections,
+                            0,
+                            &letter,
+                            ui::ROW_HEIGHT,
+                            ui::HEADER_HEIGHT,
+                        ),
                 )
+            }
+            Message::JumpToCategory(key) => {
+                self.letter_grid = false;
+                let y = self.most_used_height()
+                    + ui::app_list::offset_of(
+                        &crate::apps::category_sections(&self.apps),
+                        0,
+                        &key,
+                        ui::ROW_HEIGHT,
+                        ui::HEADER_HEIGHT,
+                    );
+                self.scroll_list(y)
+            }
+            Message::ModeMenu(open) => {
+                self.mode_menu = open;
+                Task::none()
+            }
+            Message::SetListMode(mode) => {
+                self.mode_menu = false;
+                self.letter_grid = false;
+                let save = self.edit(|c| c.list_mode = mode);
+                let top = self.scroll_list(0.0);
+                Task::batch([save, top])
+            }
+            Message::ToggleFolder(i) => {
+                if !self.open_folders.remove(&i) {
+                    self.open_folders.insert(i);
+                }
+                Task::none()
             }
             Message::PowerMenu(open) => {
                 self.power_open = open;
@@ -550,19 +636,33 @@ impl Application for App {
             row::with_children(vec![
                 column::with_children(vec![
                     search.width(Length::Fixed(ui::LIST_WIDTH)).into(),
-                    if self.letter_grid {
-                        let present: Vec<char> = crate::apps::sections(&self.apps)
+                    ui::app_list::list_bar(self.config.list_mode, self.mode_menu),
+                    if self.letter_grid && self.config.list_mode == ListMode::Category {
+                        let present: Vec<&'static str> = crate::apps::category_sections(&self.apps)
                             .into_iter()
-                            .map(|(c, _)| c)
+                            .map(|(k, _)| k)
                             .collect();
+                        ui::app_list::category_grid(&present)
+                    } else if self.letter_grid {
+                        let sections = match self.config.list_mode {
+                            ListMode::Folders if !self.folders.is_empty() => {
+                                crate::apps::sections_of(&self.apps, &self.loose)
+                            }
+                            _ => crate::apps::sections(&self.apps),
+                        };
+                        let present: Vec<char> = sections.into_iter().map(|(c, _)| c).collect();
                         ui::app_list::letter_grid(&present)
                     } else {
-                        ui::app_list::view(
-                            &self.apps,
-                            &self.usage_top,
-                            self.config.show_most_used,
-                            self.list_id.clone(),
-                        )
+                        ui::app_list::view(ui::app_list::ListView {
+                            apps: &self.apps,
+                            most_used: &self.usage_top,
+                            show_most_used: self.config.show_most_used,
+                            mode: self.config.list_mode,
+                            folders: &self.folders,
+                            loose: &self.loose,
+                            open_folders: &self.open_folders,
+                            list_id: self.list_id.clone(),
+                        })
                     },
                 ])
                 .spacing(spacing.section)
