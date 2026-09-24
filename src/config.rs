@@ -223,8 +223,23 @@ impl Config {
         }
     }
 
-    pub fn save(&self) -> Result<(), String> {
-        self.save_to(&Self::path().ok_or("no config directory")?)
+    /// Apply `f` to the config as it is on disk and save the result.
+    ///
+    /// The menu and the Settings window each keep a copy in memory, and the
+    /// menu's copy may not have loaded yet. Saving a whole copy would undo
+    /// whatever the other side saved since; changing the file itself cannot.
+    /// Serialised, so two quick edits cannot interleave on the temp file.
+    pub fn update_at(path: &Path, f: impl FnOnce(&mut Config)) -> Result<Config, String> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut config = Self::load_from(path, &[], None);
+        f(&mut config);
+        config.save_to(path)?;
+        Ok(config)
+    }
+
+    pub fn update(f: impl FnOnce(&mut Config)) -> Result<Config, String> {
+        Self::update_at(&Self::path().ok_or("no config directory")?, f)
     }
 
     /// Write-then-rename so a crash can't leave a half-written file.
@@ -365,6 +380,35 @@ mod tests {
             (c.list_mode, c.right_side, c.finish),
             (ListMode::Folders, RightSide::Recent, TileFinish::Accent)
         );
+    }
+
+    #[test]
+    fn update_at_changes_the_file_not_a_stale_copy() {
+        // The menu and the Settings window each hold a copy; a change made
+        // through one must not undo what the other saved in the meantime.
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        let stale = Config::default();
+        let mut on_disk = Config::seeded(&installed(&["chromium"]), None);
+        on_disk.list_mode = ListMode::Folders;
+        on_disk.save_to(&p).unwrap();
+
+        let saved = Config::update_at(&p, |c| c.finish = TileFinish::Solid).unwrap();
+
+        assert_ne!(stale.groups, saved.groups);
+        let back = Config::load_from(&p, &[], None);
+        assert_eq!(back.finish, TileFinish::Solid);
+        assert_eq!(back.list_mode, ListMode::Folders);
+        assert_eq!(ids(&back.groups[0]), ["chromium"]);
+    }
+
+    #[test]
+    fn update_at_seeds_nothing_when_the_file_is_missing_and_unreadable_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        let saved = Config::update_at(&p, |c| c.show_most_used = false).unwrap();
+        assert!(!saved.show_most_used);
+        assert!(!Config::load_from(&p, &[], None).show_most_used);
     }
 
     #[test]

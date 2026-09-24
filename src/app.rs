@@ -41,6 +41,8 @@ pub struct App {
     loose: Vec<usize>,
     open_folders: std::collections::HashSet<usize>,
     mode_menu: bool,
+    /// Bumped on every config edit; a save result older than this is stale.
+    edit_gen: u64,
     favs: Vec<String>,
     recent: Vec<String>,
     right_menu: bool,
@@ -144,6 +146,7 @@ pub enum Message {
     AddFavourite(String),
     RemoveFavourite(String),
     FavouritesSaved(Vec<String>),
+    ConfigSaved(u64, Box<Config>),
     /// A tile pressed in edit mode: pick it up, drop onto it, or put it back.
     TileClicked(TileRef),
     DropEnd(usize),
@@ -194,34 +197,47 @@ fn load() -> Loaded {
 
 impl App {
     fn close_popup(&mut self) -> Task<Message> {
-        self.power_open = false;
-        self.context = None;
-        self.edit = ui::tiles::Edit::default();
-        self.letter_grid = false;
-        self.mode_menu = false;
-        self.right_menu = false;
+        self.reset_popup_state();
         match self.popup.take() {
             Some(id) => cosmic::iced::platform_specific::shell::commands::popup::destroy_popup(id),
             None => Task::none(),
         }
     }
 
-    /// Apply a change to the config and save it off-thread.
-    fn edit(&mut self, f: impl FnOnce(&mut Config)) -> Task<Message> {
+    /// Apply a change to the config: at once to the copy on screen, and to
+    /// the file as it is on disk (off-thread), so a change made here can
+    /// never undo one the Settings window saved, and an edit made before the
+    /// first load cannot wipe the pins. The saved result replaces the copy on
+    /// screen unless a newer edit has been made since.
+    fn edit(&mut self, f: impl Fn(&mut Config) + Send + 'static) -> Task<Message> {
         f(&mut self.config);
         self.context = None;
-        let snapshot = self.config.clone();
+        self.edit_gen = self.edit_gen.wrapping_add(1);
+        let generation = self.edit_gen;
         Task::perform(
             async move {
-                tokio::task::spawn_blocking(move || snapshot.save())
+                tokio::task::spawn_blocking(move || Config::update(f))
                     .await
                     .unwrap_or_else(|e| Err(e.to_string()))
             },
-            |r| match r {
-                Ok(()) => cosmic::action::none(),
+            move |r| match r {
+                Ok(saved) => cosmic::action::app(Message::ConfigSaved(generation, Box::new(saved))),
                 Err(e) => cosmic::action::app(Message::ShowError(e)),
             },
         )
+    }
+
+    /// Everything that belongs to one opening of the popup. Cleared however
+    /// the popup goes away — our own close, Escape, or a click outside.
+    fn reset_popup_state(&mut self) {
+        self.power_open = false;
+        self.context = None;
+        self.edit = ui::tiles::Edit::default();
+        self.letter_grid = false;
+        self.mode_menu = false;
+        self.right_menu = false;
+        self.query.clear();
+        self.selected = 0;
     }
 
     /// Height of the Most used block at the top of the list, if shown.
@@ -332,6 +348,7 @@ impl Application for App {
                 loose: Vec::new(),
                 open_folders: std::collections::HashSet::new(),
                 mode_menu: false,
+                edit_gen: 0,
                 favs: Vec::new(),
                 recent: Vec::new(),
                 right_menu: false,
@@ -421,7 +438,7 @@ impl Application for App {
             Message::PopupClosed(id) => {
                 if self.popup == Some(id) {
                     self.popup = None;
-                    self.power_open = false;
+                    self.reset_popup_state();
                 }
                 Task::none()
             }
@@ -501,7 +518,7 @@ impl Application for App {
             Message::SetListMode(mode) => {
                 self.mode_menu = false;
                 self.letter_grid = false;
-                let save = self.edit(|c| c.list_mode = mode);
+                let save = self.edit(move |c| c.list_mode = mode);
                 let top = self.scroll_list(0.0);
                 Task::batch([save, top])
             }
@@ -514,7 +531,7 @@ impl Application for App {
                 if side != RightSide::Tiles {
                     self.edit = ui::tiles::Edit::default();
                 }
-                self.edit(|c| c.right_side = side)
+                self.edit(move |c| c.right_side = side)
             }
             Message::AddFavourite(id) => {
                 let list = crate::favorites::with_added(&self.favs, &id);
@@ -523,6 +540,12 @@ impl Application for App {
             Message::RemoveFavourite(id) => {
                 let list = crate::favorites::with_removed(&self.favs, &id);
                 self.save_favourites(list)
+            }
+            Message::ConfigSaved(generation, saved) => {
+                if generation == self.edit_gen {
+                    self.config = *saved;
+                }
+                Task::none()
             }
             Message::FavouritesSaved(list) => {
                 self.favs = list;
@@ -595,11 +618,11 @@ impl Application for App {
                 self.context = None;
                 Task::none()
             }
-            Message::Pin(id) => self.edit(|c| c.pin(&id)),
-            Message::Unpin(id) => self.edit(|c| c.unpin(&id)),
-            Message::Resize(r, size) => self.edit(|c| c.resize(r, size)),
-            Message::MoveToGroup(r, g) => self.edit(|c| c.move_tile(r, g, usize::MAX)),
-            Message::NewGroupWith(r) => self.edit(|c| {
+            Message::Pin(id) => self.edit(move |c| c.pin(&id)),
+            Message::Unpin(id) => self.edit(move |c| c.unpin(&id)),
+            Message::Resize(r, size) => self.edit(move |c| c.resize(r, size)),
+            Message::MoveToGroup(r, g) => self.edit(move |c| c.move_tile(r, g, usize::MAX)),
+            Message::NewGroupWith(r) => self.edit(move |c| {
                 let g = c.add_group(fl!("new-group-name"));
                 c.move_tile(r, g, 0);
             }),
@@ -618,17 +641,13 @@ impl Application for App {
                 Task::batch([close, run])
             }
             Message::ToggleEdit => {
-                let was_on = self.edit.on;
+                // Every change in edit mode is saved as it happens, so
+                // leaving it has nothing left to write.
                 self.edit = ui::tiles::Edit {
-                    on: !was_on,
+                    on: !self.edit.on,
                     picked: None,
                 };
-                // Renames are kept in memory while typing and saved on Done.
-                if was_on {
-                    self.edit(|_| {})
-                } else {
-                    Task::none()
-                }
+                Task::none()
             }
             Message::TileClicked(at) => match self.edit.picked {
                 None => {
@@ -641,28 +660,30 @@ impl Application for App {
                 }
                 Some(from) => {
                     self.edit.picked = None;
-                    self.edit(|c| c.move_tile(from, at.0, at.1))
+                    self.edit(move |c| c.move_tile(from, at.0, at.1))
                 }
             },
             Message::DropEnd(g) => match self.edit.picked.take() {
-                Some(from) => self.edit(|c| c.move_tile(from, g, usize::MAX)),
+                Some(from) => self.edit(move |c| c.move_tile(from, g, usize::MAX)),
                 None => Task::none(),
             },
             Message::DropNew => match self.edit.picked.take() {
-                Some(from) => self.edit(|c| {
+                Some(from) => self.edit(move |c| {
                     let g = c.add_group(fl!("new-group-name"));
                     c.move_tile(from, g, 0);
                 }),
                 None => Task::none(),
             },
-            Message::AddGroup => self.edit(|c| {
+            Message::AddGroup => self.edit(move |c| {
                 c.add_group(fl!("new-group-name"));
             }),
-            Message::RenameGroup(g, name) => {
-                self.config.rename_group(g, name);
-                Task::none()
+            Message::RenameGroup(g, name) => self.edit(move |c| c.rename_group(g, name.clone())),
+            Message::RemoveGroup(g) => {
+                // Group indices shift, so a picked tile's reference would
+                // point at the wrong tile.
+                self.edit.picked = None;
+                self.edit(move |c| c.remove_group(g))
             }
-            Message::RemoveGroup(g) => self.edit(|c| c.remove_group(g)),
             Message::OpenSettings => {
                 crate::settings::open_window();
                 // A window over the popup would leave it orphaned beneath.

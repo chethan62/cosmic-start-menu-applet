@@ -31,8 +31,16 @@ pub enum Message {
 }
 
 impl Settings {
-    fn save(&mut self) {
-        self.error = self.config.save().err();
+    /// Change one thing in the file as it is now, so edits the menu made
+    /// while this window was open (pins, moves, modes) are kept.
+    fn change(&mut self, f: impl FnOnce(&mut Config)) {
+        match Config::update(f) {
+            Ok(saved) => {
+                self.config = saved;
+                self.error = None;
+            }
+            Err(e) => self.error = Some(e),
+        }
     }
 }
 
@@ -69,12 +77,10 @@ impl Application for Settings {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SetFinish(finish) => {
-                self.config.finish = finish;
-                self.save();
+                self.change(|c| c.finish = finish);
             }
             Message::SetMostUsed(on) => {
-                self.config.show_most_used = on;
-                self.save();
+                self.change(|c| c.show_most_used = on);
             }
             Message::AskReset(ask) => self.confirm_reset = ask,
             Message::Reset => {
@@ -82,8 +88,8 @@ impl Application for Settings {
                 let installed: Vec<String> =
                     crate::apps::load_all().into_iter().map(|a| a.id).collect();
                 let favorites = crate::config::favorites_text();
-                self.config.groups = Config::seeded(&installed, favorites.as_deref()).groups;
-                self.save();
+                let groups = Config::seeded(&installed, favorites.as_deref()).groups;
+                self.change(|c| c.groups = groups);
             }
             Message::Present => {
                 // Raise the open window instead of opening a second one.

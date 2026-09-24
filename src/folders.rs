@@ -1,4 +1,4 @@
-//! The folders James already made in COSMIC's App Library, reused as the
+//! The folders the user already made in COSMIC's App Library, reused as the
 //! Start menu's "Folders" view. Read-only: the App Library owns this file.
 
 use serde::Deserialize;
