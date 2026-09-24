@@ -19,6 +19,8 @@ pub struct App {
     pub exec: Option<String>,
     pub terminal: bool,
     pub actions: Vec<Action>,
+    /// Desktop-entry `Categories`, e.g. `["Graphics", "3DGraphics"]`.
+    pub categories: Vec<String>,
 }
 
 impl Default for App {
@@ -32,6 +34,7 @@ impl Default for App {
             exec: None,
             terminal: false,
             actions: Vec::new(),
+            categories: Vec::new(),
         }
     }
 }
@@ -129,7 +132,66 @@ fn from_entry(de: &fde::DesktopEntry, locales: &[String]) -> App {
         exec: de.exec().map(str::to_owned),
         terminal: de.terminal(),
         actions,
+        categories: de
+            .categories()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| !c.is_empty())
+            .map(str::to_owned)
+            .collect(),
     }
+}
+
+/// Main desktop-entry categories, in priority order: an app in both Utility
+/// and Development is filed under Development.
+const MAIN: &[(&str, &str)] = &[
+    ("Game", "cat-games"),
+    ("Graphics", "cat-graphics"),
+    ("AudioVideo", "cat-audio-video"),
+    ("Development", "cat-development"),
+    ("Network", "cat-internet"),
+    ("Office", "cat-office"),
+    ("Education", "cat-education"),
+    ("Science", "cat-science"),
+    ("Settings", "cat-settings"),
+    ("System", "cat-system"),
+    ("Utility", "cat-utilities"),
+];
+
+/// Display order of the category headings; l10n keys.
+pub const CATEGORY_ORDER: &[&str] = &[
+    "cat-games",
+    "cat-graphics",
+    "cat-audio-video",
+    "cat-development",
+    "cat-internet",
+    "cat-office",
+    "cat-education",
+    "cat-science",
+    "cat-settings",
+    "cat-system",
+    "cat-utilities",
+    "cat-other",
+];
+
+/// The l10n key of the category heading an app goes under.
+pub fn category_of(app: &App) -> &'static str {
+    MAIN.iter()
+        .find(|(k, _)| app.categories.iter().any(|c| c == k))
+        .map_or("cat-other", |(_, v)| v)
+}
+
+/// Apps (already A–Z) grouped by category, in `CATEGORY_ORDER`.
+pub fn category_sections(apps: &[App]) -> Vec<(&'static str, Vec<usize>)> {
+    CATEGORY_ORDER
+        .iter()
+        .filter_map(|&key| {
+            let idx: Vec<usize> = (0..apps.len())
+                .filter(|&i| category_of(&apps[i]) == key)
+                .collect();
+            (!idx.is_empty()).then_some((key, idx))
+        })
+        .collect()
 }
 
 /// The A–Z header an app sorts under. Digits, symbols and blank names share
@@ -219,6 +281,23 @@ mod tests {
         fs::write(d.path().join("bad.desktop"), "\u{0}\u{1}not an ini").unwrap();
         entry(d.path(), "ok", "Name=Ok\nExec=ok");
         assert_eq!(load_from(vec![d.path().into()], &[], None).len(), 1);
+    }
+
+    #[test]
+    fn category_priority_and_other() {
+        let mk = |c: &[&str]| App {
+            categories: c.iter().map(|s| s.to_string()).collect(),
+            ..App::default()
+        };
+        assert_eq!(
+            category_of(&mk(&["Utility", "Development"])),
+            "cat-development"
+        );
+        assert_eq!(
+            category_of(&mk(&["Graphics", "3DGraphics"])),
+            "cat-graphics"
+        );
+        assert_eq!(category_of(&mk(&["COSMIC"])), "cat-other");
     }
 
     #[test]

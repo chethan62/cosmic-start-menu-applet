@@ -1061,6 +1061,7 @@ dependencies = [
  "fluent-bundle",
  "futures",
  "libcosmic",
+ "ron 0.12.2",
  "serde",
  "tempfile",
  "tokio",

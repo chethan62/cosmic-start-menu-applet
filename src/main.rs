@@ -6,6 +6,7 @@
 mod app;
 mod apps;
 mod config;
+mod folders;
 mod i18n;
 mod launch;
 mod process;
