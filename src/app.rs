@@ -195,6 +195,52 @@ fn load() -> Loaded {
     }
 }
 
+/// What is open on top of the popup, for deciding what Escape closes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Layers {
+    context: bool,
+    power: bool,
+    mode_menu: bool,
+    right_menu: bool,
+    letter_grid: bool,
+    picked: bool,
+    query: bool,
+    editing: bool,
+}
+
+/// What one press of Escape does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Escape {
+    Context,
+    Menus,
+    LetterGrid,
+    DropPick,
+    ClearSearch,
+    LeaveEdit,
+    ClosePopup,
+}
+
+/// Escape peels one layer at a time, topmost first, and closes the whole
+/// popup only when nothing else is open — so dismissing a right-click menu
+/// or a search never throws the user out of the Start menu.
+fn escape_target(l: Layers) -> Escape {
+    if l.context {
+        Escape::Context
+    } else if l.power || l.mode_menu || l.right_menu {
+        Escape::Menus
+    } else if l.letter_grid {
+        Escape::LetterGrid
+    } else if l.picked {
+        Escape::DropPick
+    } else if l.query {
+        Escape::ClearSearch
+    } else if l.editing {
+        Escape::LeaveEdit
+    } else {
+        Escape::ClosePopup
+    }
+}
+
 impl App {
     fn close_popup(&mut self) -> Task<Message> {
         self.reset_popup_state();
@@ -587,13 +633,34 @@ impl Application for App {
                 Task::none()
             }
             Message::SearchKey(Key::Escape) => {
-                if self.query.is_empty() {
-                    self.close_popup()
-                } else {
-                    self.query.clear();
-                    self.selected = 0;
-                    text_input::focus(self.search_id.clone())
+                let layers = Layers {
+                    context: self.context.is_some(),
+                    power: self.power_open,
+                    mode_menu: self.mode_menu,
+                    right_menu: self.right_menu,
+                    letter_grid: self.letter_grid,
+                    picked: self.edit.picked.is_some(),
+                    query: !self.query.is_empty(),
+                    editing: self.edit.on,
+                };
+                match escape_target(layers) {
+                    Escape::Context => self.context = None,
+                    Escape::Menus => {
+                        self.power_open = false;
+                        self.mode_menu = false;
+                        self.right_menu = false;
+                    }
+                    Escape::LetterGrid => self.letter_grid = false,
+                    Escape::DropPick => self.edit.picked = None,
+                    Escape::ClearSearch => {
+                        self.query.clear();
+                        self.selected = 0;
+                        return text_input::focus(self.search_id.clone());
+                    }
+                    Escape::LeaveEdit => self.edit = ui::tiles::Edit::default(),
+                    Escape::ClosePopup => return self.close_popup(),
                 }
+                Task::none()
             }
             Message::Submit => {
                 let hits = crate::search::rank(&self.apps, &self.query);
@@ -834,5 +901,82 @@ impl Application for App {
             }
         }
         self.core.applet.popup_container(with_menu).into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layers() -> Layers {
+        Layers::default()
+    }
+
+    #[test]
+    fn escape_closes_the_topmost_thing_first() {
+        let all = Layers {
+            context: true,
+            power: true,
+            mode_menu: true,
+            right_menu: true,
+            letter_grid: true,
+            picked: true,
+            query: true,
+            editing: true,
+        };
+        assert_eq!(escape_target(all), Escape::Context);
+        assert_eq!(
+            escape_target(Layers {
+                context: false,
+                ..all
+            }),
+            Escape::Menus
+        );
+        assert_eq!(
+            escape_target(Layers {
+                power: true,
+                ..layers()
+            }),
+            Escape::Menus
+        );
+        assert_eq!(
+            escape_target(Layers {
+                letter_grid: true,
+                query: true,
+                ..layers()
+            }),
+            Escape::LetterGrid
+        );
+        assert_eq!(
+            escape_target(Layers {
+                picked: true,
+                query: true,
+                ..layers()
+            }),
+            Escape::DropPick
+        );
+        assert_eq!(
+            escape_target(Layers {
+                query: true,
+                ..layers()
+            }),
+            Escape::ClearSearch
+        );
+    }
+
+    #[test]
+    fn escape_leaves_edit_mode_after_clearing_a_search() {
+        assert_eq!(
+            escape_target(Layers {
+                editing: true,
+                ..layers()
+            }),
+            Escape::LeaveEdit
+        );
+    }
+
+    #[test]
+    fn escape_closes_the_popup_only_when_nothing_else_is_open() {
+        assert_eq!(escape_target(layers()), Escape::ClosePopup);
     }
 }
