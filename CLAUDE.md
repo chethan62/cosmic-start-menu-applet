@@ -14,6 +14,7 @@ COSMIC panel applet giving a Windows 10-style Start menu (A-Z app list, pinned t
 
 ## Status
 - 2026-09-23: created with standard structure.
+- 2026-09-26: v0.1 built and in the panel. Super is bound to `--toggle` (COSMIC custom shortcut); tiles 2 or 3 across in Settings.
 
 ## Layout
 - `context/` brief, decisions, the why  |  `references/` inputs, links  |  `working/` WIP
