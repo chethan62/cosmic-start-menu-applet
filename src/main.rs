@@ -8,6 +8,7 @@ mod folders;
 mod i18n;
 mod launch;
 mod process;
+mod remote;
 mod search;
 mod session;
 mod settings;
@@ -34,5 +35,15 @@ fn main() -> cosmic::iced::Result {
         return cosmic::app::run::<settings::Settings>(settings::window_settings(), ());
     }
 
+    // `--toggle` is for keyboard shortcuts: open or close the running menu.
+    if std::env::args().skip(1).any(|arg| arg == "--toggle") {
+        if let Err(err) = remote::send_toggle() {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    remote::serve();
     cosmic::applet::run::<app::App>(())
 }

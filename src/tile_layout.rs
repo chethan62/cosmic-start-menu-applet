@@ -1,12 +1,14 @@
 //! Where each pinned tile sits in its group's grid.
 //!
-//! Windows 10 groups are six small cells wide. Tiles are placed first-fit in
+//! Windows 10 groups are six small cells wide; the Settings window also offers
+//! four (two Medium tiles across). Tiles are placed first-fit in
 //! the user's order — the packer never reorders, so a tile stays where the
 //! user dropped it, and a gap it cannot fill stays a gap. Adapted from
 //! cosmic-control-center-applet's packer, for three sizes and 0-based output.
 
 use crate::config::TileSize;
 
+/// Cells across a group at the default of three Medium tiles.
 pub const COLUMNS: u16 = 6;
 
 /// (columns, rows) a tile of `size` covers.
@@ -35,8 +37,11 @@ pub struct Pack {
     pub rows: u16,
 }
 
-pub fn pack(sizes: &[TileSize]) -> Pack {
-    let mut occupied: Vec<[bool; COLUMNS as usize]> = Vec::new();
+/// Place `sizes` in a grid `columns` cells wide. `columns` is at least 4, so
+/// every footprint fits.
+pub fn pack(sizes: &[TileSize], columns: u16) -> Pack {
+    let columns = usize::from(columns.max(4));
+    let mut occupied: Vec<Vec<bool>> = Vec::new();
     let mut tiles = Vec::with_capacity(sizes.len());
     for &size in sizes {
         let (w, h) = footprint(size);
@@ -46,10 +51,10 @@ pub fn pack(sizes: &[TileSize]) -> Pack {
         let mut row = 0usize;
         let col = loop {
             while occupied.len() < row + h {
-                occupied.push([false; COLUMNS as usize]);
+                occupied.push(vec![false; columns]);
             }
             let fits = |c: usize| (0..w).all(|dc| (0..h).all(|dr| !occupied[row + dr][c + dc]));
-            if let Some(c) = (0..=(COLUMNS as usize - w)).find(|&c| fits(c)) {
+            if let Some(c) = (0..=(columns - w)).find(|&c| fits(c)) {
                 break c;
             }
             row += 1;
@@ -90,7 +95,7 @@ mod tests {
 
     #[test]
     fn three_mediums_fill_a_row() {
-        let pk = pack(&[Medium, Medium, Medium]);
+        let pk = pack(&[Medium, Medium, Medium], COLUMNS);
         assert_eq!(
             pk.tiles,
             [p(0, 0, Medium), p(2, 0, Medium), p(4, 0, Medium)]
@@ -100,7 +105,7 @@ mod tests {
 
     #[test]
     fn smalls_tuck_into_the_gap_beside_a_wide() {
-        let pk = pack(&[Wide, Small, Small, Small, Small]);
+        let pk = pack(&[Wide, Small, Small, Small, Small], COLUMNS);
         assert_eq!(
             pk.tiles,
             [
@@ -116,14 +121,30 @@ mod tests {
 
     #[test]
     fn a_wide_that_does_not_fit_starts_a_new_band() {
-        let pk = pack(&[Medium, Medium, Wide]);
+        let pk = pack(&[Medium, Medium, Wide], COLUMNS);
         assert_eq!(pk.tiles[2], p(0, 2, Wide));
         assert_eq!(pk.rows, 4);
     }
 
     #[test]
+    fn two_across_wraps_the_third_medium() {
+        let pk = pack(&[Medium, Medium, Medium], 4);
+        assert_eq!(
+            pk.tiles,
+            [p(0, 0, Medium), p(2, 0, Medium), p(0, 2, Medium)]
+        );
+        assert_eq!(pk.rows, 4);
+    }
+
+    #[test]
+    fn a_wide_fills_a_two_across_group() {
+        let pk = pack(&[Wide, Small], 4);
+        assert_eq!(pk.tiles, [p(0, 0, Wide), p(0, 2, Small)]);
+    }
+
+    #[test]
     fn empty_is_zero_rows() {
-        assert_eq!(pack(&[]).rows, 0);
+        assert_eq!(pack(&[], COLUMNS).rows, 0);
     }
 
     #[test]
@@ -131,7 +152,7 @@ mod tests {
         let sizes = [
             Small, Wide, Medium, Small, Medium, Wide, Small, Small, Medium,
         ];
-        let pk = pack(&sizes);
+        let pk = pack(&sizes, COLUMNS);
         let mut seen = std::collections::HashSet::new();
         for t in &pk.tiles {
             for c in t.col..t.col + t.cols {

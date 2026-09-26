@@ -11,7 +11,7 @@ use crate::config::{Config, TileFinish};
 use crate::fl;
 
 const WINDOW_WIDTH: f32 = 440.0;
-const WINDOW_HEIGHT: f32 = 520.0;
+const WINDOW_HEIGHT: f32 = 640.0;
 
 pub struct Settings {
     core: Core,
@@ -24,6 +24,7 @@ pub struct Settings {
 pub enum Message {
     SetFinish(TileFinish),
     SetMostUsed(bool),
+    SetColumns(u8),
     AskReset(bool),
     Reset,
     Present,
@@ -78,6 +79,9 @@ impl Application for Settings {
         match message {
             Message::SetFinish(finish) => {
                 self.change(|c| c.finish = finish);
+            }
+            Message::SetColumns(n) => {
+                self.change(|c| c.tile_columns = n);
             }
             Message::SetMostUsed(on) => {
                 self.change(|c| c.show_most_used = on);
@@ -135,6 +139,19 @@ impl Application for Settings {
             ));
         }
 
+        let current = if self.config.tile_columns == 2 { 2 } else { 3 };
+        let mut columns = column::with_capacity(3)
+            .spacing(space / 2)
+            .push(text::title4(fl!("settings-columns")));
+        for (value, key) in [(3u8, "columns-three"), (2u8, "columns-two")] {
+            columns = columns.push(radio(
+                text::body(fl!(key)),
+                value,
+                Some(current),
+                Message::SetColumns,
+            ));
+        }
+
         let most_used = row::with_capacity(2)
             .align_y(Alignment::Center)
             .push(text::body(fl!("settings-most-used")).width(Length::Fill))
@@ -161,10 +178,12 @@ impl Application for Settings {
             None => text::caption(fl!("settings-saved")),
         };
 
-        let body = column::with_capacity(8)
+        let body = column::with_capacity(10)
             .spacing(space)
             .padding(space)
             .push(finish)
+            .push(divider::horizontal::default())
+            .push(columns)
             .push(divider::horizontal::default())
             .push(most_used)
             .push(divider::horizontal::default())

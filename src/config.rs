@@ -78,6 +78,8 @@ pub struct Config {
     pub show_most_used: bool,
     pub list_mode: ListMode,
     pub right_side: RightSide,
+    /// Medium tiles across a group: 2 or 3.
+    pub tile_columns: u8,
     #[serde(rename = "group")]
     pub groups: Vec<Group>,
 }
@@ -89,6 +91,7 @@ impl Default for Config {
             show_most_used: true,
             list_mode: ListMode::Az,
             right_side: RightSide::Tiles,
+            tile_columns: 3,
             groups: Vec::new(),
         }
     }
@@ -111,6 +114,7 @@ const HEADER: &str = "\
 # safe to edit by hand. `app` is a desktop-entry id without `.desktop`.
 # `size` is small | medium | wide. `source` is reserved for live tiles.
 # `list_mode` is az | category | folders; `right_side` is tiles | favourites | recent.
+# `tile_columns` is how many Medium tiles fit across a group: 2 or 3.
 ";
 
 /// The dock's favourites file is a RON list of strings. Pull the quoted
@@ -137,6 +141,25 @@ fn default_group(tiles: Vec<Tile>) -> Group {
 }
 
 impl Config {
+    /// Small-tile cells across a group. Anything but 2 reads as the default 3,
+    /// so a hand-edited 7 can't push the tiles off the popup.
+    pub fn tile_cells(&self) -> u16 {
+        if self.tile_columns == 2 {
+            4
+        } else {
+            crate::tile_layout::COLUMNS
+        }
+    }
+
+    /// The file as it is, or defaults. Never seeds or writes: this is for
+    /// sizing the popup before the full load lands.
+    pub fn peek() -> Config {
+        Self::path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|raw| toml::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
     pub fn path() -> Option<PathBuf> {
         Some(
             dirs::config_dir()?

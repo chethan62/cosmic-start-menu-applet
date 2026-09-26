@@ -18,7 +18,7 @@ use crate::app::{Message, Target};
 use crate::apps::App;
 use crate::config::{Config, RightSide, TileFinish, TileRef, TileSize};
 use crate::fl;
-use crate::tile_layout::{self, COLUMNS};
+use crate::tile_layout;
 use crate::ui::{menu_card, quiet_button, selected_button, tile_button_class, Spacing};
 
 /// One grid cell. Small tiles are one cell, Medium 2×2, Wide 4×2.
@@ -29,8 +29,13 @@ fn span(cells: u16, gap: f32) -> f32 {
 }
 
 /// The width a group's grid takes, for sizing the column.
-pub fn grid_width(spacing: Spacing) -> f32 {
-    span(COLUMNS, f32::from(spacing.gap))
+pub fn grid_width(spacing: Spacing, cells: u16) -> f32 {
+    span(cells, f32::from(spacing.gap))
+}
+
+/// The whole right-hand column: the grid plus room for the scrollbar.
+pub fn column_width(spacing: Spacing, cells: u16) -> f32 {
+    grid_width(spacing, cells) + 12.0
 }
 
 /// Edit mode: tiles are picked up and dropped instead of launched.
@@ -251,7 +256,8 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
         menu_open,
     } = v;
     let switch = side_switch(config.right_side, menu_open);
-    let width = Length::Fixed(grid_width(spacing) + 12.0);
+    let cells = config.tile_cells();
+    let width = Length::Fixed(column_width(spacing, cells));
     match config.right_side {
         RightSide::Tiles => {}
         RightSide::Favourites => {
@@ -273,7 +279,7 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
     for (g, group) in config.groups.iter().enumerate() {
         let visible = config.visible_tiles(g, &installed);
         let sizes: Vec<TileSize> = visible.iter().map(|(_, t)| t.size).collect();
-        let packed = tile_layout::pack(&sizes);
+        let packed = tile_layout::pack(&sizes, cells);
         let mut layer: Vec<Element<'a, Message>> = Vec::with_capacity(visible.len());
         for ((ti, t), p) in visible.iter().zip(packed.tiles.iter()) {
             let Some(app) = apps.iter().find(|a| a.id == t.app) else {
@@ -298,7 +304,7 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
         }
         groups = groups.push(
             container(stack(layer))
-                .width(Length::Fixed(grid_width(spacing)))
+                .width(Length::Fixed(grid_width(spacing, cells)))
                 .height(Length::Fixed(span(packed.rows.max(1), gap))),
         );
     }

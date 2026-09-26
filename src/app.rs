@@ -14,18 +14,30 @@ use crate::folders::Folder;
 use crate::session::Power;
 use crate::ui::{self, Spacing};
 
-/// Rail + list + a six-cell tile column, with padding. Fixed like Windows 10's
-/// menu; each column scrolls inside it.
-pub const POPUP_WIDTH: f32 = 680.0;
 pub const POPUP_HEIGHT: f32 = 600.0;
+/// Between the rail, the list and the tile column.
+const COLUMN_GAP: f32 = 12.0;
+
+/// Rail + list + tile column, with padding: exactly what the columns need.
+/// Summed rather than fixed, because the tile column grows with the theme's
+/// density and the 2/3-across setting; a fixed width clipped the right-hand
+/// tiles under Spacious. Each column scrolls inside it.
+fn popup_width(spacing: Spacing, cells: u16) -> f32 {
+    2.0 * f32::from(spacing.section)
+        + ui::RAIL_WIDTH
+        + COLUMN_GAP
+        + ui::LIST_WIDTH
+        + COLUMN_GAP
+        + ui::tiles::column_width(spacing, cells)
+}
 
 /// The popup's size, for both the Wayland positioner and libcosmic's popup
 /// frame. The frame (`popup_container`) clamps to 360 wide by default, which
 /// is a Control-Center-sized popup; left alone it hides the tile column.
-fn popup_limits() -> Limits {
+fn popup_limits(width: f32) -> Limits {
     Limits::NONE
-        .min_width(POPUP_WIDTH)
-        .max_width(POPUP_WIDTH)
+        .min_width(width)
+        .max_width(width)
         .min_height(POPUP_HEIGHT)
         .max_height(POPUP_HEIGHT)
 }
@@ -366,6 +378,10 @@ impl App {
     fn spacing(&self) -> Spacing {
         Spacing::from_theme(self.core.system_theme())
     }
+
+    fn width(&self) -> f32 {
+        popup_width(self.spacing(), self.config.tile_cells())
+    }
 }
 
 impl Application for App {
@@ -434,6 +450,9 @@ impl Application for App {
                 self.query.clear();
                 self.selected = 0;
                 self.context = None;
+                // The width depends on the 2/3-across setting, which the full
+                // load below only delivers after the popup is placed.
+                self.config.tile_columns = Config::peek().tile_columns;
                 let id = window::Id::unique();
                 self.popup = Some(id);
                 let mut settings = self.core.applet.get_popup_settings(
@@ -443,7 +462,7 @@ impl Application for App {
                     None,
                     None,
                 );
-                settings.positioner.size_limits = popup_limits();
+                settings.positioner.size_limits = popup_limits(self.width());
                 let popup =
                     cosmic::iced::platform_specific::shell::commands::popup::get_popup(settings);
 
@@ -786,10 +805,20 @@ impl Application for App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
+        // `--toggle` from a keyboard shortcut, as if the button were clicked.
+        let remote = Subscription::run_with((), |()| {
+            futures::stream::unfold(crate::remote::requests(), |requests| async move {
+                let mut receiver = requests?;
+                receiver
+                    .recv()
+                    .await
+                    .map(|()| (Message::TogglePopup, Some(receiver)))
+            })
+        });
         if self.popup.is_none() {
-            return Subscription::none();
+            return remote;
         }
-        cosmic::iced::event::listen_with(|event, _status, _id| match event {
+        let keys = cosmic::iced::event::listen_with(|event, _status, _id| match event {
             cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
                 key: KeyCode::Named(named),
                 ..
@@ -800,7 +829,8 @@ impl Application for App {
                 _ => None,
             },
             _ => None,
-        })
+        });
+        Subscription::batch([remote, keys])
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -879,11 +909,11 @@ impl Application for App {
                     menu_open: self.right_menu,
                 }),
             ])
-            .spacing(12)
+            .spacing(COLUMN_GAP)
             .into()
         };
         let columns = row::with_children(vec![ui::rail::view(self.power_open, &self.avatar), main])
-            .spacing(12)
+            .spacing(COLUMN_GAP)
             .height(Length::Fill);
 
         let mut body = column::with_capacity(2).push(columns);
@@ -893,7 +923,7 @@ impl Application for App {
 
         let body = container(body.spacing(spacing.gap))
             .padding(spacing.section)
-            .width(Length::Fixed(POPUP_WIDTH))
+            .width(Length::Fixed(self.width()))
             .height(Length::Fixed(POPUP_HEIGHT));
 
         // The pointer is tracked over the same box the menu is positioned
@@ -910,7 +940,7 @@ impl Application for App {
         self.core
             .applet
             .popup_container(with_menu)
-            .limits(popup_limits())
+            .limits(popup_limits(self.width()))
             .into()
     }
 }
@@ -990,10 +1020,31 @@ mod tests {
     fn popup_frame_is_as_wide_as_the_menu() {
         // libcosmic's popup_container clamps every applet popup to 360 wide
         // unless told otherwise, which cut the tile column off entirely.
-        let max = popup_limits().max();
-        assert_eq!(max.width, POPUP_WIDTH);
-        assert_eq!(popup_limits().min().width, POPUP_WIDTH);
+        let max = popup_limits(700.0).max();
+        assert_eq!(max.width, 700.0);
+        assert_eq!(popup_limits(700.0).min().width, 700.0);
         assert!(max.height >= POPUP_HEIGHT);
+    }
+
+    #[test]
+    fn popup_fits_the_tile_column_at_every_density() {
+        // Spacious gaps once pushed the third tile column past a fixed
+        // 680, and the popup edge clipped it narrower than the other two.
+        for gap in [4, 8, 12] {
+            let spacing = Spacing {
+                gap,
+                pad_y: gap,
+                section: gap + 4,
+            };
+            for cells in [4, 6] {
+                let used = 2.0 * f32::from(spacing.section)
+                    + ui::RAIL_WIDTH
+                    + ui::LIST_WIDTH
+                    + 2.0 * COLUMN_GAP
+                    + ui::tiles::grid_width(spacing, cells);
+                assert!(popup_width(spacing, cells) >= used);
+            }
+        }
     }
 
     #[test]
