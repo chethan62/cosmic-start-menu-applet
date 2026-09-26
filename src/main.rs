@@ -7,6 +7,7 @@ mod favorites;
 mod folders;
 mod i18n;
 mod launch;
+mod launcher;
 mod process;
 mod remote;
 mod search;

@@ -70,6 +70,8 @@ pub struct App {
     recent: Vec<String>,
     right_menu: bool,
     avatar: Avatar,
+    /// The launcher's results for the current query, beyond apps.
+    found: Vec<crate::launcher::Item>,
 }
 
 /// The account picture, or the initial to draw when there is none.
@@ -135,6 +137,10 @@ pub enum Key {
 #[derive(Debug, Clone)]
 pub enum Message {
     TogglePopup,
+    /// Something back from COSMIC's launcher service.
+    Launcher(crate::launcher::Reply),
+    /// Run one of the launcher's results.
+    LauncherActivate(u32),
     PopupClosed(Id),
     /// Everything read from disk when the popup opens, in one go.
     Loaded(Box<Loaded>),
@@ -307,6 +313,7 @@ impl App {
         self.right_menu = false;
         self.query.clear();
         self.selected = 0;
+        self.found.clear();
     }
 
     /// Height of the Most used block at the top of the list, if shown.
@@ -379,6 +386,16 @@ impl App {
         Spacing::from_theme(self.core.system_theme())
     }
 
+    /// Ask the launcher about the current query, or drop its old answer.
+    fn ask_launcher(&mut self) {
+        let q = self.query.trim();
+        if q.is_empty() {
+            self.found.clear();
+        } else {
+            crate::launcher::search(q);
+        }
+    }
+
     fn width(&self) -> f32 {
         popup_width(self.spacing(), self.config.tile_cells())
     }
@@ -426,6 +443,7 @@ impl Application for App {
                 recent: Vec::new(),
                 right_menu: false,
                 avatar: Avatar::default(),
+                found: Vec::new(),
             },
             Task::none(),
         )
@@ -647,11 +665,33 @@ impl Application for App {
             Message::Query(q) => {
                 self.query = q;
                 self.selected = 0;
+                self.ask_launcher();
+                Task::none()
+            }
+            Message::Launcher(reply) => match reply {
+                // A late answer to a query since cleared would bring back
+                // results for text no longer in the box.
+                crate::launcher::Reply::Results(items) => {
+                    if !self.query.trim().is_empty() {
+                        self.found = items;
+                    }
+                    Task::none()
+                }
+                crate::launcher::Reply::Fill(text) => {
+                    self.query = text;
+                    self.selected = 0;
+                    self.ask_launcher();
+                    text_input::move_cursor_to_end(self.search_id.clone())
+                }
+                crate::launcher::Reply::Close => self.close_popup(),
+            },
+            Message::LauncherActivate(id) => {
+                crate::launcher::activate(id);
                 Task::none()
             }
             Message::SearchKey(Key::Down) => {
-                let hits = crate::search::rank(&self.apps, &self.query).len();
-                self.selected = (self.selected + 1).min(hits.saturating_sub(1));
+                let total = crate::search::rank(&self.apps, &self.query).len() + self.found.len();
+                self.selected = (self.selected + 1).min(total.saturating_sub(1));
                 Task::none()
             }
             Message::SearchKey(Key::Up) => {
@@ -681,6 +721,7 @@ impl Application for App {
                     Escape::ClearSearch => {
                         self.query.clear();
                         self.selected = 0;
+                        self.found.clear();
                         return text_input::focus(self.search_id.clone());
                     }
                     Escape::LeaveEdit => self.edit = ui::tiles::Edit::default(),
@@ -690,8 +731,13 @@ impl Application for App {
             }
             Message::Submit => {
                 let hits = crate::search::rank(&self.apps, &self.query);
-                match hits.get(self.selected.min(hits.len().saturating_sub(1))) {
-                    Some(&i) => self.update(Message::Launch(i)),
+                let total = hits.len() + self.found.len();
+                let n = self.selected.min(total.saturating_sub(1));
+                if let Some(&i) = hits.get(n) {
+                    return self.update(Message::Launch(i));
+                }
+                match self.found.get(n - hits.len()) {
+                    Some(item) => self.update(Message::LauncherActivate(item.id)),
                     None => Task::none(),
                 }
             }
@@ -815,6 +861,16 @@ impl Application for App {
                     .map(|()| (Message::TogglePopup, Some(receiver)))
             })
         });
+        let launcher = Subscription::run_with((), |()| {
+            futures::stream::unfold(crate::launcher::receiver(), |replies| async move {
+                let mut receiver = replies?;
+                receiver
+                    .recv()
+                    .await
+                    .map(|reply| (Message::Launcher(reply), Some(receiver)))
+            })
+        });
+        let remote = Subscription::batch([remote, launcher]);
         if self.popup.is_none() {
             return remote;
         }
@@ -856,10 +912,12 @@ impl Application for App {
         let searching = !self.query.trim().is_empty();
         let main: Element<'_, Message> = if searching {
             let hits = crate::search::rank(&self.apps, &self.query);
-            let selected = self.selected.min(hits.len().saturating_sub(1));
+            let selected = self
+                .selected
+                .min((hits.len() + self.found.len()).saturating_sub(1));
             column::with_children(vec![
                 search.into(),
-                ui::app_list::results_view(&self.apps, &hits, selected, &self.query),
+                ui::app_list::results_view(&self.apps, &hits, &self.found, selected, &self.query),
             ])
             .spacing(spacing.section)
             .width(Length::Fill)

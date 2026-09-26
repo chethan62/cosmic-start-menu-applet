@@ -1,7 +1,15 @@
 app-name = Start Menu
 search-placeholder = Type to search
 most-used = Most used
-no-results = No apps match “{ $query }”
+no-results = Nothing matches “{ $query }”
+search-apps = Apps
+search-windows = Open windows
+search-calculator = Calculator
+search-files = Files
+search-commands = Commands
+search-web = Web
+search-sound = Sound
+search-other = More
 default-group = Pinned
 power = Power
 power-lock = Lock

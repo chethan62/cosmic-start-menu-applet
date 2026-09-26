@@ -15,6 +15,7 @@ use crate::apps::{self, App};
 use crate::config::ListMode;
 use crate::fl;
 use crate::folders::Folder;
+use crate::launcher::{Item, Section};
 use crate::ui::{
     menu_card, quiet_button, row_radius, selected_button, HEADER_HEIGHT, ICON, LIST_WIDTH,
     ROW_HEIGHT,
@@ -336,23 +337,66 @@ pub fn category_grid<'a>(present: &[&'static str]) -> Element<'a, Message> {
         .into()
 }
 
-/// Search results, best first, with the keyboard selection highlighted.
+/// One of the launcher's results: icon, name, and its detail underneath.
+fn found_row<'a>(item: &'a Item, selected: bool) -> Element<'a, Message> {
+    let glyph: Element<'a, Message> = match &item.icon {
+        Some(name) => icon::from_name(name.as_str()).size(ICON).into(),
+        None => Space::new().width(ICON).into(),
+    };
+    let mut words = column::with_capacity(2)
+        .push(text::body(&item.name).wrapping(cosmic::iced::widget::text::Wrapping::None));
+    if !item.description.is_empty() {
+        words = words.push(
+            text::caption(&item.description).wrapping(cosmic::iced::widget::text::Wrapping::None),
+        );
+    }
+    let body = row::with_children(vec![glyph, words.into()])
+        .spacing(12)
+        .align_y(Alignment::Center);
+    button::custom(centred(body))
+        .class(if selected {
+            selected_button()
+        } else {
+            quiet_button()
+        })
+        .padding([0, 10])
+        .width(Length::Fill)
+        .height(Length::Fixed(ROW_HEIGHT + 12.0))
+        .on_press(Message::LauncherActivate(item.id))
+        .into()
+}
+
+/// Search results: matching apps first, then what the launcher found, one
+/// headed section per kind. `selected` counts down through both.
 pub fn results_view<'a>(
     list: &'a [App],
     hits: &[usize],
+    found: &'a [Item],
     selected: usize,
     query: &str,
 ) -> Element<'a, Message> {
-    if hits.is_empty() {
+    if hits.is_empty() && found.is_empty() {
         return container(text::body(fl!("no-results", query = query.trim())))
             .padding([12, 10])
             .into();
     }
-    let rows = hits
-        .iter()
-        .enumerate()
-        .map(|(n, &i)| app_row(&list[i], i, n == selected))
-        .collect::<Vec<_>>();
+    let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(hits.len() + found.len() + 8);
+    if !hits.is_empty() && !found.is_empty() {
+        rows.push(section_label(fl!("search-apps")));
+    }
+    rows.extend(
+        hits.iter()
+            .enumerate()
+            .map(|(n, &i)| app_row(&list[i], i, n == selected)),
+    );
+    let mut last: Option<Section> = None;
+    for (n, item) in found.iter().enumerate() {
+        if last != Some(item.section) {
+            rows.push(section_label(fl!(item.section.title_key())));
+            last = Some(item.section);
+        }
+        rows.push(found_row(item, hits.len() + n == selected));
+    }
     scrollable(column::with_children(rows))
         .height(Length::Fill)
         .into()
