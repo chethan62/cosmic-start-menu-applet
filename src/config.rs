@@ -154,8 +154,12 @@ impl Config {
     /// The file as it is, or defaults. Never seeds or writes: this is for
     /// sizing the popup before the full load lands.
     pub fn peek() -> Config {
-        Self::path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
+        Self::path().map_or_else(Config::default, |p| Self::peek_at(&p))
+    }
+
+    pub fn peek_at(path: &Path) -> Config {
+        std::fs::read_to_string(path)
+            .ok()
             .and_then(|raw| toml::from_str(&raw).ok())
             .unwrap_or_default()
     }
@@ -375,6 +379,30 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tile_cells_are_four_or_six_whatever_the_file_says() {
+        for (columns, cells) in [(2, 4), (3, 6), (0, 6), (7, 6)] {
+            let c = Config {
+                tile_columns: columns,
+                ..Config::default()
+            };
+            assert_eq!(c.tile_cells(), cells, "tile_columns = {columns}");
+        }
+        assert_eq!(Config::default().tile_cells(), 6);
+    }
+
+    #[test]
+    fn peek_never_writes_and_reads_the_column_choice() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("config.toml");
+        assert_eq!(Config::peek_at(&p), Config::default());
+        assert!(!p.exists(), "peek must not seed a missing file");
+        std::fs::write(&p, "tile_columns = 2\n").unwrap();
+        assert_eq!(Config::peek_at(&p).tile_columns, 2);
+        std::fs::write(&p, "not toml [").unwrap();
+        assert_eq!(Config::peek_at(&p), Config::default());
+    }
+
     use super::*;
     use std::collections::HashSet;
 

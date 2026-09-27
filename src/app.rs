@@ -52,6 +52,27 @@ pub enum Mode {
     Shortcut,
 }
 
+/// Which search result the keyboard selection lands on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pick {
+    /// Index into the ranked app hits.
+    App(usize),
+    /// Index into the launcher's results, which follow the apps.
+    Found(usize),
+}
+
+/// The selection counts down through the apps, then the launcher's results;
+/// past the end it sticks on the last row, as the arrow keys do.
+fn pick(apps: usize, found: usize, selected: usize) -> Option<Pick> {
+    let last = (apps + found).checked_sub(1)?;
+    let n = selected.min(last);
+    Some(if n < apps {
+        Pick::App(n)
+    } else {
+        Pick::Found(n - apps)
+    })
+}
+
 pub struct App {
     core: Core,
     mode: Mode,
@@ -804,13 +825,11 @@ impl Application for App {
             }
             Message::Submit => {
                 let hits = crate::search::rank(&self.apps, &self.query);
-                let total = hits.len() + self.found.len();
-                let n = self.selected.min(total.saturating_sub(1));
-                if let Some(&i) = hits.get(n) {
-                    return self.update(Message::Launch(i));
-                }
-                match self.found.get(n - hits.len()) {
-                    Some(item) => self.update(Message::LauncherActivate(item.id)),
+                match pick(hits.len(), self.found.len(), self.selected) {
+                    Some(Pick::App(n)) => self.update(Message::Launch(hits[n])),
+                    Some(Pick::Found(n)) => {
+                        self.update(Message::LauncherActivate(self.found[n].id))
+                    }
                     None => Task::none(),
                 }
             }
@@ -1191,6 +1210,19 @@ mod tests {
                 assert!(popup_width(spacing, cells) >= used);
             }
         }
+    }
+
+    #[test]
+    fn enter_picks_apps_first_then_launcher_results() {
+        assert_eq!(pick(0, 0, 0), None);
+        assert_eq!(pick(2, 3, 0), Some(Pick::App(0)));
+        assert_eq!(pick(2, 3, 1), Some(Pick::App(1)));
+        assert_eq!(pick(2, 3, 2), Some(Pick::Found(0)));
+        assert_eq!(pick(2, 3, 4), Some(Pick::Found(2)));
+        // A selection left over from a longer list clamps to the last row.
+        assert_eq!(pick(2, 3, 9), Some(Pick::Found(2)));
+        assert_eq!(pick(0, 1, 5), Some(Pick::Found(0)));
+        assert_eq!(pick(3, 0, 5), Some(Pick::App(2)));
     }
 
     #[test]
