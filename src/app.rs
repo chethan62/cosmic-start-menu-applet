@@ -42,8 +42,94 @@ fn popup_limits(width: f32) -> Limits {
         .max_height(POPUP_HEIGHT)
 }
 
+/// How this process shows the menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// The panel button, with the menu as its popup.
+    Panel,
+    /// `--toggle` from a keyboard shortcut: the menu as a layer surface of
+    /// its own, open from the start, and the process ends when it closes.
+    Shortcut,
+}
+
+/// Window settings for [`Mode::Shortcut`]: no window of its own, only the
+/// layer surface the menu opens.
+pub fn window_settings() -> cosmic::app::Settings {
+    cosmic::app::Settings::default()
+        .no_main_window(true)
+        .transparent(true)
+        .exit_on_close(false)
+        .debug(false)
+}
+
+/// How long a closed shortcut menu lingers before exiting, so a launch it
+/// started has been handed off, and a quick second press can reopen it.
+const LINGER: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// The shortcut menu's surface: bottom-left, just above the panel (the
+/// compositor keeps it out of the panel's reserved strip). It has to hold
+/// the keyboard outright: asked for on demand, COSMIC left focus where it
+/// was. A full-screen transparent surface catching click-away was tried and
+/// dropped: COSMIC blurred the whole screen behind it.
+fn shortcut_surface(id: Id, width: f32) -> Task<Message> {
+    use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+        get_layer_surface, Anchor, KeyboardInteractivity, Layer,
+    };
+    use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
+        IcedMargin, IcedOutput, SctkLayerSurfaceSettings,
+    };
+    get_layer_surface(SctkLayerSurfaceSettings {
+        id,
+        layer: Layer::Top,
+        keyboard_interactivity: KeyboardInteractivity::Exclusive,
+        input_zone: None,
+        anchor: Anchor::BOTTOM | Anchor::LEFT,
+        output: IcedOutput::Active,
+        namespace: "start-menu".into(),
+        margin: IcedMargin {
+            top: 0,
+            right: 0,
+            bottom: EDGE,
+            left: EDGE,
+        },
+        size: Some((Some(width as u32), Some(POPUP_HEIGHT as u32))),
+        exclusive_zone: 0,
+        size_limits: popup_limits(width),
+    })
+}
+
+/// Gap between the shortcut menu and the screen edge / panel.
+const EDGE: i32 = 4;
+
+/// The menu's card, as `popup_container` paints it, for the shortcut menu:
+/// `popup_container` is an autosize widget that resizes the panel's popup,
+/// and has no business resizing a layer surface.
+fn card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
+    let cosmic = theme.cosmic();
+    let background = cosmic.background(theme.transparent);
+    cosmic::widget::container::Style {
+        text_color: Some(background.on.into()),
+        icon_color: Some(background.on.into()),
+        background: Some(cosmic::iced::Color::from(background.base).into()),
+        border: cosmic::iced::Border {
+            radius: cosmic.corner_radii.radius_m.into(),
+            width: 1.0,
+            color: background.divider.into(),
+        },
+        ..Default::default()
+    }
+}
+
 pub struct App {
     core: Core,
+    mode: Mode,
+    /// Bumped whenever a shortcut menu opens, so an exit scheduled by an
+    /// earlier close can tell it is stale.
+    opened: u64,
+    /// Whether the shortcut menu has had the keyboard yet. The surface
+    /// reports losing focus once before it first gains it, which is not a
+    /// click away.
+    had_focus: bool,
     popup: Option<Id>,
     config: Config,
     apps: Vec<AppEntry>,
@@ -137,6 +223,13 @@ pub enum Key {
 #[derive(Debug, Clone)]
 pub enum Message {
     TogglePopup,
+    /// The shortcut menu got the keyboard: now the search box can take it.
+    /// Focusing it at open does nothing, the surface does not exist yet.
+    Focused,
+    /// The shortcut menu lost the keyboard, e.g. to a click on a window.
+    Unfocused,
+    /// A shortcut menu closed `LINGER` ago; exit unless it reopened since.
+    Exit(u64),
     /// Something back from COSMIC's launcher service.
     Launcher(crate::launcher::Reply),
     /// Run one of the launcher's results.
@@ -271,11 +364,97 @@ fn escape_target(l: Layers) -> Escape {
 }
 
 impl App {
+    /// Show the menu: a popup off the panel button, or in shortcut mode a
+    /// layer surface the compositor gives the keyboard to.
+    fn open(&mut self) -> Task<Message> {
+        self.power_open = false;
+        self.error = None;
+        self.query.clear();
+        self.selected = 0;
+        self.context = None;
+        // The width depends on the 2/3-across setting, which the full
+        // load below only delivers after the popup is placed.
+        self.config.tile_columns = Config::peek().tile_columns;
+        let id = window::Id::unique();
+        self.popup = Some(id);
+        self.opened = self.opened.wrapping_add(1);
+        let popup = match self.mode {
+            Mode::Panel => {
+                let mut settings = self.core.applet.get_popup_settings(
+                    self.core.main_window_id().unwrap_or(id),
+                    id,
+                    None,
+                    None,
+                    None,
+                );
+                settings.positioner.size_limits = popup_limits(self.width());
+                cosmic::iced::platform_specific::shell::commands::popup::get_popup(settings)
+            }
+            Mode::Shortcut => shortcut_surface(id, self.width()),
+        };
+
+        // Re-read apps, history and config on every open, off-thread:
+        // an app installed a minute ago shows up, and edits made in the
+        // Settings window apply, without a file watcher.
+        let load = Task::perform(
+            async {
+                tokio::task::spawn_blocking(load)
+                    .await
+                    .map_err(|e| e.to_string())
+            },
+            |r| match r {
+                Ok(l) => cosmic::action::app(Message::Loaded(Box::new(l))),
+                Err(e) => cosmic::action::app(Message::ShowError(e)),
+            },
+        );
+
+        // Focused straight away so typing searches, as in Windows.
+        let focus = text_input::focus(self.search_id.clone());
+
+        // libcosmic only blurs surfaces it tracks in `surface_views`,
+        // and a popup made with `get_popup` is not one of them, so the
+        // theme's frosted styling would give a translucent popup with
+        // nothing blurred behind it. Ask for the blur ourselves, and
+        // through the Wayland command rather than `window::enable_blur`:
+        // the popup's surface does not exist yet in this batch, and
+        // only the Wayland path parks the request until it does.
+        // (Same fix as cosmic-control-center-applet.)
+        // A shortcut menu always asks: its card is translucent either way.
+        if self.mode == Mode::Shortcut || self.core.frosted(self.core.system_theme().cosmic()) {
+            let blur = cosmic::iced::platform_specific::shell::commands::blur::blur(
+                id,
+                Some(vec![cosmic::iced::Rectangle {
+                    x: 0.0,
+                    y: 0.0,
+                    width: f32::MAX,
+                    height: f32::MAX,
+                }]),
+            );
+            Task::batch([popup, blur.discard(), load, focus])
+        } else {
+            Task::batch([popup, load, focus])
+        }
+    }
+
     fn close_popup(&mut self) -> Task<Message> {
         self.reset_popup_state();
-        match self.popup.take() {
-            Some(id) => cosmic::iced::platform_specific::shell::commands::popup::destroy_popup(id),
-            None => Task::none(),
+        let Some(id) = self.popup.take() else {
+            return Task::none();
+        };
+        match self.mode {
+            Mode::Panel => {
+                cosmic::iced::platform_specific::shell::commands::popup::destroy_popup(id)
+            }
+            Mode::Shortcut => {
+                let generation = self.opened;
+                let exit = Task::perform(tokio::time::sleep(LINGER), move |()| {
+                    cosmic::action::app(Message::Exit(generation))
+                });
+                Task::batch([
+                    cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface(id),
+                    exit,
+                ])
+            }
         }
     }
 
@@ -403,7 +582,7 @@ impl App {
 
 impl Application for App {
     type Executor = cosmic::SingleThreadExecutor;
-    type Flags = ();
+    type Flags = Mode;
     type Message = Message;
 
     const APP_ID: &'static str = "io.github.jjnuthuagen.StartMenu";
@@ -416,37 +595,42 @@ impl Application for App {
         &mut self.core
     }
 
-    fn init(core: Core, _flags: ()) -> (Self, Task<Message>) {
-        (
-            Self {
-                core,
-                popup: None,
-                config: Config::default(),
-                apps: Vec::new(),
-                usage_top: Vec::new(),
-                power_open: false,
-                error: None,
-                query: String::new(),
-                selected: 0,
-                search_id: cosmic::widget::Id::new("start-menu-search"),
-                pointer: Point::ORIGIN,
-                context: None,
-                edit: ui::tiles::Edit::default(),
-                letter_grid: false,
-                list_id: cosmic::widget::Id::new("start-menu-list"),
-                folders: Vec::new(),
-                loose: Vec::new(),
-                open_folders: std::collections::HashSet::new(),
-                mode_menu: false,
-                edit_gen: 0,
-                favs: Vec::new(),
-                recent: Vec::new(),
-                right_menu: false,
-                avatar: Avatar::default(),
-                found: Vec::new(),
-            },
-            Task::none(),
-        )
+    fn init(core: Core, mode: Mode) -> (Self, Task<Message>) {
+        let mut app = Self {
+            core,
+            mode,
+            opened: 0,
+            had_focus: false,
+            popup: None,
+            config: Config::default(),
+            apps: Vec::new(),
+            usage_top: Vec::new(),
+            power_open: false,
+            error: None,
+            query: String::new(),
+            selected: 0,
+            search_id: cosmic::widget::Id::new("start-menu-search"),
+            pointer: Point::ORIGIN,
+            context: None,
+            edit: ui::tiles::Edit::default(),
+            letter_grid: false,
+            list_id: cosmic::widget::Id::new("start-menu-list"),
+            folders: Vec::new(),
+            loose: Vec::new(),
+            open_folders: std::collections::HashSet::new(),
+            mode_menu: false,
+            edit_gen: 0,
+            favs: Vec::new(),
+            recent: Vec::new(),
+            right_menu: false,
+            avatar: Avatar::default(),
+            found: Vec::new(),
+        };
+        let open = match mode {
+            Mode::Panel => Task::none(),
+            Mode::Shortcut => app.open(),
+        };
+        (app, open)
     }
 
     fn style(&self) -> Option<cosmic::iced::theme::Style> {
@@ -463,67 +647,24 @@ impl Application for App {
                 if self.popup.is_some() {
                     return self.close_popup();
                 }
-                self.power_open = false;
-                self.error = None;
-                self.query.clear();
-                self.selected = 0;
-                self.context = None;
-                // The width depends on the 2/3-across setting, which the full
-                // load below only delivers after the popup is placed.
-                self.config.tile_columns = Config::peek().tile_columns;
-                let id = window::Id::unique();
-                self.popup = Some(id);
-                let mut settings = self.core.applet.get_popup_settings(
-                    self.core.main_window_id().unwrap_or(id),
-                    id,
-                    None,
-                    None,
-                    None,
-                );
-                settings.positioner.size_limits = popup_limits(self.width());
-                let popup =
-                    cosmic::iced::platform_specific::shell::commands::popup::get_popup(settings);
-
-                // Re-read apps, history and config on every open, off-thread:
-                // an app installed a minute ago shows up, and edits made in the
-                // Settings window apply, without a file watcher.
-                let load = Task::perform(
-                    async {
-                        tokio::task::spawn_blocking(load)
-                            .await
-                            .map_err(|e| e.to_string())
-                    },
-                    |r| match r {
-                        Ok(l) => cosmic::action::app(Message::Loaded(Box::new(l))),
-                        Err(e) => cosmic::action::app(Message::ShowError(e)),
-                    },
-                );
-
-                // Focused straight away so typing searches, as in Windows.
-                let focus = text_input::focus(self.search_id.clone());
-
-                // libcosmic only blurs surfaces it tracks in `surface_views`,
-                // and a popup made with `get_popup` is not one of them, so the
-                // theme's frosted styling would give a translucent popup with
-                // nothing blurred behind it. Ask for the blur ourselves, and
-                // through the Wayland command rather than `window::enable_blur`:
-                // the popup's surface does not exist yet in this batch, and
-                // only the Wayland path parks the request until it does.
-                // (Same fix as cosmic-control-center-applet.)
-                if self.core.frosted(self.core.system_theme().cosmic()) {
-                    let blur = cosmic::iced::platform_specific::shell::commands::blur::blur(
-                        id,
-                        Some(vec![cosmic::iced::Rectangle {
-                            x: 0.0,
-                            y: 0.0,
-                            width: f32::MAX,
-                            height: f32::MAX,
-                        }]),
-                    );
-                    Task::batch([popup, blur.discard(), load, focus])
-                } else {
-                    Task::batch([popup, load, focus])
+                self.open()
+            }
+            Message::Focused => {
+                self.had_focus = true;
+                text_input::focus(self.search_id.clone())
+            }
+            Message::Unfocused => {
+                if !self.had_focus {
+                    return Task::none();
                 }
+                self.had_focus = false;
+                self.close_popup()
+            }
+            Message::Exit(generation) => {
+                if self.popup.is_none() && generation == self.opened {
+                    return cosmic::iced::exit();
+                }
+                Task::none()
             }
             Message::PopupClosed(id) => {
                 if self.popup == Some(id) {
@@ -851,7 +992,7 @@ impl Application for App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        // `--toggle` from a keyboard shortcut, as if the button were clicked.
+        // A second shortcut press, asking this shortcut menu to close.
         let remote = Subscription::run_with((), |()| {
             futures::stream::unfold(crate::remote::requests(), |requests| async move {
                 let mut receiver = requests?;
@@ -886,7 +1027,15 @@ impl Application for App {
             },
             _ => None,
         });
-        Subscription::batch([remote, keys])
+        if self.mode == Mode::Panel {
+            return Subscription::batch([remote, keys]);
+        }
+        let focus = cosmic::iced::event::listen_with(|event, _status, _id| match event {
+            cosmic::iced::Event::Window(window::Event::Focused) => Some(Message::Focused),
+            cosmic::iced::Event::Window(window::Event::Unfocused) => Some(Message::Unfocused),
+            _ => None,
+        });
+        Subscription::batch([remote, keys, focus])
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -994,6 +1143,11 @@ impl Application for App {
                     .popup(menu)
                     .position(popover::Position::Point(ctx.at));
             }
+        }
+        if self.mode == Mode::Shortcut {
+            return container(with_menu)
+                .class(cosmic::theme::Container::custom(card_style))
+                .into();
         }
         self.core
             .applet

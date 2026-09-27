@@ -8,3 +8,4 @@ context/sessions/
 
 # Rust
 /target/
+.claude/

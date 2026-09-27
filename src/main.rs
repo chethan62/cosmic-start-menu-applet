@@ -36,15 +36,14 @@ fn main() -> cosmic::iced::Result {
         return cosmic::app::run::<settings::Settings>(settings::window_settings(), ());
     }
 
-    // `--toggle` is for keyboard shortcuts: open or close the running menu.
+    // `--toggle` is for keyboard shortcuts: the menu as its own surface, so
+    // it gets the keyboard; or, if one is open, close it.
     if std::env::args().skip(1).any(|arg| arg == "--toggle") {
-        if let Err(err) = remote::send_toggle() {
-            eprintln!("{err}");
-            std::process::exit(1);
+        if remote::claim() == remote::Claim::AlreadyOpen {
+            return Ok(());
         }
-        return Ok(());
+        return cosmic::app::run::<app::App>(app::window_settings(), app::Mode::Shortcut);
     }
 
-    remote::serve();
-    cosmic::applet::run::<app::App>(())
+    cosmic::applet::run::<app::App>(app::Mode::Panel)
 }
