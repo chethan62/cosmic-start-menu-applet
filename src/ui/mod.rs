@@ -36,7 +36,18 @@ pub struct Spacing {
 
 impl Spacing {
     pub fn from_theme(theme: &cosmic::Theme) -> Self {
-        let spacing = theme.cosmic().spacing;
+        Self::from_tokens(theme.cosmic().spacing)
+    }
+
+    /// From the Appearance density setting alone, which is readable the
+    /// moment the process starts; the theme arrives a little later.
+    pub fn from_density() -> Self {
+        Self::from_tokens(cosmic::cosmic_theme::Spacing::from(
+            cosmic::config::interface_density(),
+        ))
+    }
+
+    fn from_tokens(spacing: cosmic::cosmic_theme::Spacing) -> Self {
         Self {
             gap: spacing.space_xxs,
             pad_y: spacing.space_xxs,

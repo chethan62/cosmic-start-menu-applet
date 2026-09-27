@@ -524,7 +524,14 @@ impl App {
     }
 
     fn spacing(&self) -> Spacing {
-        Spacing::from_theme(self.core.system_theme())
+        match self.mode {
+            Mode::Panel => Spacing::from_theme(self.core.system_theme()),
+            // The shortcut menu sizes its surface in `init`, before the
+            // theme has loaded: the default theme's spacing made the surface
+            // too narrow for Spacious gaps, squeezing the last tile column.
+            // One source for both the size and the layout keeps them agreeing.
+            Mode::Shortcut => Spacing::from_density(),
+        }
     }
 
     /// Ask the launcher about the current query, or drop its old answer.
