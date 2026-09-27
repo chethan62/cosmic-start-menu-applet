@@ -76,6 +76,39 @@ fn pick(apps: usize, found: usize, selected: usize) -> Option<Pick> {
 /// How long the shortcut menu waits after losing the keyboard before closing.
 const FOCUS_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// The blur region behind the frosted popup, shaped to stay inside its
+/// rounded corners. The compositor blurs rectangles as given — a single
+/// whole-surface rectangle put square blurred corners behind the frame's
+/// rounded ones, poking out at the popup's bottom. A cross of three
+/// rectangles leaves the four `radius`×`radius` corner squares unblurred;
+/// what remains of those squares inside the arc is a few pixels under an
+/// already-translucent film.
+fn blur_region(width: f32, height: f32, radius: f32) -> Vec<cosmic::iced::Rectangle> {
+    let r = radius.clamp(0.0, width.min(height) / 2.0);
+    vec![
+        // The middle band, full height.
+        cosmic::iced::Rectangle {
+            x: r,
+            y: 0.0,
+            width: (width - 2.0 * r).max(0.0),
+            height,
+        },
+        // The side bands, inset past the corner arcs.
+        cosmic::iced::Rectangle {
+            x: 0.0,
+            y: r,
+            width: r,
+            height: (height - 2.0 * r).max(0.0),
+        },
+        cosmic::iced::Rectangle {
+            x: width - r,
+            y: r,
+            width: r,
+            height: (height - 2.0 * r).max(0.0),
+        },
+    ]
+}
+
 pub struct App {
     core: Core,
     mode: Mode,
@@ -419,15 +452,16 @@ impl App {
         // only the Wayland path parks the request until it does.
         // (Same fix as cosmic-control-center-applet.)
         // The shortcut menu's card is opaque instead: see `shortcut::card_style`.
+        //
+        // The region is shaped to the frame's corners: the popup is exactly
+        // `width()` × `POPUP_HEIGHT`, and `popup_container` rounds its card
+        // by the theme's medium radius, so a whole-surface rectangle showed
+        // square blurred corners outside the arcs.
         if self.mode == Mode::Panel && self.core.frosted(self.core.system_theme().cosmic()) {
+            let radius = self.core.system_theme().cosmic().corner_radii.radius_m[0];
             let blur = cosmic::iced::platform_specific::shell::commands::blur::blur(
                 id,
-                Some(vec![cosmic::iced::Rectangle {
-                    x: 0.0,
-                    y: 0.0,
-                    width: f32::MAX,
-                    height: f32::MAX,
-                }]),
+                Some(blur_region(self.width(), POPUP_HEIGHT, radius)),
             );
             Task::batch([popup, blur.discard(), load, focus])
         } else {
@@ -1312,6 +1346,34 @@ mod tests {
             }),
             Escape::LeaveEdit
         );
+    }
+
+    #[test]
+    fn blur_stays_inside_the_rounded_corners() {
+        let rects = blur_region(700.0, 600.0, 16.0);
+        let covers = |x: f32, y: f32| {
+            rects
+                .iter()
+                .any(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
+        };
+        // The corner squares are left alone…
+        for (x, y) in [(1.0, 1.0), (699.0, 1.0), (1.0, 599.0), (699.0, 599.0)] {
+            assert!(!covers(x, y), "({x},{y}) should be unblurred");
+        }
+        // …while the edges' midpoints and the centre are blurred.
+        for (x, y) in [
+            (350.0, 1.0),
+            (350.0, 599.0),
+            (1.0, 300.0),
+            (699.0, 300.0),
+            (350.0, 300.0),
+        ] {
+            assert!(covers(x, y), "({x},{y}) should be blurred");
+        }
+        // A radius bigger than the popup cannot produce negative sizes.
+        for r in blur_region(20.0, 10.0, 50.0) {
+            assert!(r.width >= 0.0 && r.height >= 0.0);
+        }
     }
 
     #[test]
