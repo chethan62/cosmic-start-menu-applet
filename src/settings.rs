@@ -7,7 +7,7 @@ use cosmic::iced::{Alignment, Length, Subscription};
 use cosmic::widget::{button, column, container, divider, radio, row, scrollable, text, toggler};
 use cosmic::{Application, ApplicationExt, Element};
 
-use crate::config::{Config, TileFinish};
+use crate::config::{Config, MenuPosition, Search, TileFinish};
 use crate::fl;
 
 const WINDOW_WIDTH: f32 = 440.0;
@@ -25,6 +25,9 @@ pub enum Message {
     SetFinish(TileFinish),
     SetMostUsed(bool),
     SetColumns(u8),
+    SetPosition(MenuPosition),
+    SetSearch(Search),
+    SetIcon(String),
     AskReset(bool),
     Reset,
     Present,
@@ -82,6 +85,15 @@ impl Application for Settings {
             }
             Message::SetColumns(n) => {
                 self.change(|c| c.tile_columns = n);
+            }
+            Message::SetPosition(p) => {
+                self.change(|c| c.menu_position = p);
+            }
+            Message::SetSearch(search) => {
+                self.change(|c| c.search = search);
+            }
+            Message::SetIcon(name) => {
+                self.change(|c| c.panel_icon = name);
             }
             Message::SetMostUsed(on) => {
                 self.change(|c| c.show_most_used = on);
@@ -152,6 +164,72 @@ impl Application for Settings {
             ));
         }
 
+        let mut position = column::with_capacity(5)
+            .spacing(space / 2)
+            .push(text::title4(fl!("settings-position")));
+        for (value, key) in [
+            (MenuPosition::Corner, "pos-corner"),
+            (MenuPosition::Top, "pos-top"),
+            (MenuPosition::Centre, "pos-centre"),
+        ] {
+            position = position.push(radio(
+                text::body(fl!(key)),
+                value,
+                Some(self.config.menu_position),
+                Message::SetPosition,
+            ));
+        }
+        position = position.push(text::caption(fl!("settings-position-hint")));
+
+        let search = self.config.search;
+        let mut sections = column::with_capacity(6)
+            .spacing(space / 2)
+            .push(text::title4(fl!("settings-search")));
+        type Get = fn(&mut Search) -> &mut bool;
+        let toggles: [(&str, Get); 5] = [
+            ("toggle-windows", |s| &mut s.windows),
+            ("toggle-calc", |s| &mut s.calculator),
+            ("toggle-files", |s| &mut s.files),
+            ("toggle-commands", |s| &mut s.commands),
+            ("toggle-web", |s| &mut s.web),
+        ];
+        for (key, get) in toggles {
+            let mut when_on = search;
+            *get(&mut when_on) = true;
+            let mut when_off = search;
+            *get(&mut when_off) = false;
+            sections = sections.push(
+                row::with_capacity(2)
+                    .align_y(Alignment::Center)
+                    .push(text::body(fl!(key)).width(Length::Fill))
+                    .push(toggler(*get(&mut { search })).on_toggle(move |on| {
+                        Message::SetSearch(if on { when_on } else { when_off })
+                    })),
+            );
+        }
+
+        let icon_field = cosmic::widget::text_input::text_input(
+            fl!("settings-icon-hint"),
+            &self.config.panel_icon,
+        )
+        .on_input(Message::SetIcon);
+        let mut icon_pick = column::with_capacity(4)
+            .spacing(space / 2)
+            .push(text::title4(fl!("settings-icon")));
+        for (name, key) in [
+            ("start-here-symbolic", "icon-cosmic"),
+            ("view-app-grid-symbolic", "icon-grid"),
+            ("open-menu-symbolic", "icon-menu"),
+        ] {
+            icon_pick = icon_pick.push(radio(
+                text::body(fl!(key)),
+                name,
+                Some(self.config.panel_icon.as_str()),
+                |n| Message::SetIcon(n.to_owned()),
+            ));
+        }
+        icon_pick = icon_pick.push(icon_field);
+
         let most_used = row::with_capacity(2)
             .align_y(Alignment::Center)
             .push(text::body(fl!("settings-most-used")).width(Length::Fill))
@@ -178,12 +256,18 @@ impl Application for Settings {
             None => text::caption(fl!("settings-saved")),
         };
 
-        let body = column::with_capacity(10)
+        let body = column::with_capacity(16)
             .spacing(space)
             .padding(space)
             .push(finish)
             .push(divider::horizontal::default())
             .push(columns)
+            .push(divider::horizontal::default())
+            .push(position)
+            .push(divider::horizontal::default())
+            .push(sections)
+            .push(divider::horizontal::default())
+            .push(icon_pick)
             .push(divider::horizontal::default())
             .push(most_used)
             .push(divider::horizontal::default())

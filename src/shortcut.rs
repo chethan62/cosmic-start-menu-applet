@@ -8,6 +8,7 @@ use cosmic::app::Task;
 use cosmic::iced::window::Id;
 
 use crate::app::{popup_limits, Message, POPUP_HEIGHT};
+use crate::config::MenuPosition;
 
 /// Window settings for [`Mode::Shortcut`](crate::app::Mode::Shortcut): no window of its own, only the
 /// layer surface the menu opens.
@@ -28,7 +29,7 @@ pub const LINGER: std::time::Duration = std::time::Duration::from_millis(1500);
 /// the keyboard outright: asked for on demand, COSMIC left focus where it
 /// was. A full-screen transparent surface catching click-away was tried and
 /// dropped: COSMIC blurred the whole screen behind it.
-pub fn surface(id: Id, width: f32) -> Task<Message> {
+pub fn surface(id: Id, width: f32, position: MenuPosition) -> Task<Message> {
     use cosmic::iced::platform_specific::shell::commands::layer_surface::{
         get_layer_surface, Anchor, KeyboardInteractivity, Layer,
     };
@@ -40,14 +41,31 @@ pub fn surface(id: Id, width: f32) -> Task<Message> {
         layer: Layer::Top,
         keyboard_interactivity: KeyboardInteractivity::Exclusive,
         input_zone: None,
-        anchor: Anchor::BOTTOM | Anchor::LEFT,
+        // Anchoring one edge alone centres along it.
+        anchor: match position {
+            MenuPosition::Corner => Anchor::BOTTOM | Anchor::LEFT,
+            MenuPosition::Top => Anchor::TOP,
+            MenuPosition::Centre => Anchor::BOTTOM,
+        },
         output: IcedOutput::Active,
         namespace: "start-menu".into(),
         margin: IcedMargin {
-            top: 0,
+            top: if position == MenuPosition::Top {
+                EDGE
+            } else {
+                0
+            },
             right: 0,
-            bottom: EDGE,
-            left: EDGE,
+            bottom: if position == MenuPosition::Top {
+                0
+            } else {
+                EDGE
+            },
+            left: if position == MenuPosition::Corner {
+                EDGE
+            } else {
+                0
+            },
         },
         size: Some((Some(width as u32), Some(POPUP_HEIGHT as u32))),
         exclusive_zone: 0,

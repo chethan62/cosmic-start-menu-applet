@@ -346,9 +346,10 @@ impl App {
         self.query.clear();
         self.selected = 0;
         self.context = None;
-        // The width depends on the 2/3-across setting, which the full
-        // load below only delivers after the popup is placed.
-        self.config.tile_columns = Config::peek().tile_columns;
+        // The width and position depend on settings, and the full load
+        // below only delivers after the popup is placed; edits are saved as
+        // they are made, so the file is current.
+        self.config = Config::peek();
         let id = window::Id::unique();
         self.popup = Some(id);
         self.opened = self.opened.wrapping_add(1);
@@ -364,7 +365,7 @@ impl App {
                 settings.positioner.size_limits = popup_limits(self.width());
                 cosmic::iced::platform_specific::shell::commands::popup::get_popup(settings)
             }
-            Mode::Shortcut => crate::shortcut::surface(id, self.width()),
+            Mode::Shortcut => crate::shortcut::surface(id, self.width(), self.config.menu_position),
         };
 
         // Re-read apps, history and config on every open, off-thread:
@@ -585,7 +586,10 @@ impl Application for App {
             had_focus: false,
             focus_losses: 0,
             popup: None,
-            config: Config::default(),
+            // Peeked, not loaded: the panel button's icon and the shortcut
+            // surface's position are needed before the first full load, and
+            // peek never seeds a missing file.
+            config: Config::peek(),
             apps: Vec::new(),
             usage_top: Vec::new(),
             power_open: false,
@@ -809,8 +813,9 @@ impl Application for App {
             Message::Launcher(reply) => match reply {
                 // A late answer to a query since cleared would bring back
                 // results for text no longer in the box.
-                crate::launcher::Reply::Results(items) => {
+                crate::launcher::Reply::Results(mut items) => {
                     if !self.query.trim().is_empty() {
+                        items.retain(|i| self.config.keeps(i.section));
                         self.found = items;
                     }
                     Task::none()
@@ -1094,7 +1099,7 @@ impl Application for App {
         let button = self
             .core
             .applet
-            .icon_button("start-here-symbolic")
+            .icon_button(&self.config.panel_icon)
             .on_press(Message::TogglePopup);
         // Right-click opens Settings, as other panel items do.
         mouse_area(button)

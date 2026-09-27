@@ -40,6 +40,44 @@ pub enum ListMode {
     Folders,
 }
 
+/// Where the Super-key menu opens. The panel button's own popup always
+/// opens at its button; that placement is COSMIC's, not ours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MenuPosition {
+    /// Bottom-left, by where the panel button usually sits.
+    #[default]
+    Corner,
+    /// Top centre, as if pulled down from a top dock.
+    Top,
+    /// Bottom centre.
+    Centre,
+}
+
+/// Which launcher sections search shows besides apps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Search {
+    pub windows: bool,
+    pub calculator: bool,
+    pub files: bool,
+    pub commands: bool,
+    pub web: bool,
+}
+
+impl Default for Search {
+    fn default() -> Self {
+        Self {
+            windows: true,
+            calculator: true,
+            files: true,
+            // "run <anything>" shows for every query; off until asked for.
+            commands: false,
+            web: true,
+        }
+    }
+}
+
 /// What the right-hand column shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -83,6 +121,10 @@ pub struct Config {
     pub right_side: RightSide,
     /// Medium tiles across a group: 2 or 3.
     pub tile_columns: u8,
+    /// Icon name for the panel button.
+    pub panel_icon: String,
+    pub menu_position: MenuPosition,
+    pub search: Search,
     #[serde(rename = "group")]
     pub groups: Vec<Group>,
 }
@@ -95,6 +137,9 @@ impl Default for Config {
             list_mode: ListMode::Az,
             right_side: RightSide::Tiles,
             tile_columns: 3,
+            panel_icon: "start-here-symbolic".into(),
+            menu_position: MenuPosition::default(),
+            search: Search::default(),
             groups: Vec::new(),
         }
     }
@@ -118,6 +163,8 @@ const HEADER: &str = "\
 # `size` is small | medium | wide. `source` is reserved for live tiles.
 # `list_mode` is az | category | folders; `right_side` is tiles | favourites | recent.
 # `tile_columns` is how many Medium tiles fit across a group: 2 or 3.
+# `panel_icon` is any installed icon name. `menu_position` places the
+# Super-key menu: corner | top | centre. `[search]` toggles result sections.
 ";
 
 /// The dock's favourites file is a RON list of strings. Pull the quoted
@@ -304,6 +351,20 @@ impl Config {
             .map(|(_, t)| t.app.as_str())
     }
 
+    /// Whether search shows this launcher section.
+    pub fn keeps(&self, section: crate::launcher::Section) -> bool {
+        use crate::launcher::Section as S;
+        match section {
+            S::Windows => self.search.windows,
+            S::Calculator => self.search.calculator,
+            S::Files => self.search.files,
+            S::Commands => self.search.commands,
+            S::Web => self.search.web,
+            // No toggles for the rare ones; showing them is the safe side.
+            S::Sound | S::Other => true,
+        }
+    }
+
     pub fn is_pinned(&self, app: &str) -> bool {
         self.groups
             .iter()
@@ -401,6 +462,28 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn search_toggles_default_on_except_commands_and_round_trip() {
+        let c = Config::default();
+        use crate::launcher::Section as S;
+        for (s, on) in [
+            (S::Windows, true),
+            (S::Calculator, true),
+            (S::Files, true),
+            (S::Commands, false),
+            (S::Web, true),
+            (S::Sound, true),
+        ] {
+            assert_eq!(c.keeps(s), on, "{s:?}");
+        }
+        let mut c = c;
+        c.search.web = false;
+        c.menu_position = MenuPosition::Top;
+        c.panel_icon = "view-app-grid-symbolic".into();
+        let back: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back, c);
+    }
+
     #[test]
     fn rename_sets_trims_and_clears_and_survives_toml() {
         let mut c = Config::seeded(&installed(&["chromium"]), None);
