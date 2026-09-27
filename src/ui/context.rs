@@ -87,7 +87,11 @@ fn swatch_style(
     let edge = if current {
         cosmic.accent_color().into()
     } else {
-        cosmic.background(theme.transparent).component.divider.into()
+        cosmic
+            .background(theme.transparent)
+            .component
+            .divider
+            .into()
     };
     button::Style {
         background: fill.map(cosmic::iced::Background::Color),

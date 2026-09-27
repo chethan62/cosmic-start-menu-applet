@@ -1243,7 +1243,7 @@ impl Application for App {
 
     fn view(&self) -> Element<'_, Message> {
         // No right-click menu: a missed left-click kept opening Settings,
-        // which now lives at the bottom of the app list instead.
+        // which now sits as the last row of the app list instead.
         self.core
             .applet
             .icon_button(&self.config.panel_icon)
@@ -1268,7 +1268,6 @@ impl Application for App {
             column::with_children(vec![
                 search.into(),
                 ui::app_list::results_view(&self.apps, &hits, &self.found, selected, &self.query),
-                ui::app_list::settings_row(),
             ])
             .spacing(spacing.section)
             .width(Length::Fill)
@@ -1309,10 +1308,6 @@ impl Application for App {
                             list_id: self.list_id.clone(),
                         })
                     },
-                    // Pinned under the list, always in reach and never
-                    // scrolled away; it replaced the panel button's
-                    // miss-click-prone right-click.
-                    ui::app_list::settings_row(),
                 ])
                 .spacing(spacing.section)
                 .into(),
@@ -1334,8 +1329,8 @@ impl Application for App {
             ui::rail::view(self.power_open, &self.avatar, &self.config.system_panel),
             main,
         ])
-            .spacing(COLUMN_GAP)
-            .height(Length::Fill);
+        .spacing(COLUMN_GAP)
+        .height(Length::Fill);
 
         let mut body = column::with_capacity(2).push(columns);
         if let Some(e) = &self.error {

@@ -286,6 +286,28 @@ pub fn selected_button() -> button::ButtonClass {
     }
 }
 
+/// A floating menu's card: the popup's own layer colour, opaque enough to
+/// read over the list beneath it, with the theme's medium radius.
+pub fn menu_card<'a>() -> cosmic::theme::Container<'a> {
+    cosmic::theme::Container::Custom(Box::new(|theme| {
+        let cosmic = theme.cosmic();
+        let layer = cosmic.background(false);
+        let mut bg = layer.base;
+        bg.alpha = bg.alpha.max(0.96);
+        cosmic::widget::container::Style {
+            background: Some(Background::Color(Color::from(bg))),
+            text_color: Some(layer.on.into()),
+            icon_color: Some(layer.on.into()),
+            border: Border {
+                radius: cosmic.corner_radii.radius_m.into(),
+                width: 1.0,
+                color: Color::from(layer.divider),
+            },
+            ..Default::default()
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,26 +330,4 @@ mod tests {
         assert!(is_light(Color::from_rgb8(255, 185, 0)));
         assert!(!is_light(Color::from_rgb8(0, 120, 215)));
     }
-}
-
-/// A floating menu's card: the popup's own layer colour, opaque enough to
-/// read over the list beneath it, with the theme's medium radius.
-pub fn menu_card<'a>() -> cosmic::theme::Container<'a> {
-    cosmic::theme::Container::Custom(Box::new(|theme| {
-        let cosmic = theme.cosmic();
-        let layer = cosmic.background(false);
-        let mut bg = layer.base;
-        bg.alpha = bg.alpha.max(0.96);
-        cosmic::widget::container::Style {
-            background: Some(Background::Color(Color::from(bg))),
-            text_color: Some(layer.on.into()),
-            icon_color: Some(layer.on.into()),
-            border: Border {
-                radius: cosmic.corner_radii.radius_m.into(),
-                width: 1.0,
-                color: Color::from(layer.divider),
-            },
-            ..Default::default()
-        }
-    }))
 }

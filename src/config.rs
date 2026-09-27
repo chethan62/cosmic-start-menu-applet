@@ -33,8 +33,10 @@ pub enum TileFinish {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ListMode {
-    #[default]
     Az,
+    /// The default: grouped by what an app is for, which drops Settings,
+    /// System and Utilities to the bottom of the list on their own.
+    #[default]
     Category,
     /// The folders from COSMIC's App Library.
     Folders,
@@ -87,7 +89,12 @@ pub enum Slot {
     TaskManager,
 }
 
-pub const SLOTS: [Slot; 4] = [Slot::Browser, Slot::Files, Slot::Terminal, Slot::TaskManager];
+pub const SLOTS: [Slot; 4] = [
+    Slot::Browser,
+    Slot::Files,
+    Slot::Terminal,
+    Slot::TaskManager,
+];
 
 /// The rail's default-app shortcuts: which app each one launches (a desktop
 /// id; `None` means pick sensibly at launch) and which are shown at all.
@@ -244,7 +251,7 @@ impl Default for Config {
             show_most_used: true,
             locked: false,
             show_tile_names: true,
-            list_mode: ListMode::Az,
+            list_mode: ListMode::Category,
             right_side: RightSide::Tiles,
             tile_columns: 3,
             panel_icon: "start-here-symbolic".into(),
@@ -356,9 +363,7 @@ impl Config {
                 .collect();
         }
         Config {
-            groups: vec![default_group(
-                ids.into_iter().map(Tile::medium).collect(),
-            )],
+            groups: vec![default_group(ids.into_iter().map(Tile::medium).collect())],
             ..Config::default()
         }
     }
@@ -615,7 +620,8 @@ mod tests {
             assert!(!c.system_panel.shown(slot), "{slot:?}");
         }
         let mut c = c;
-        c.system_panel.set_app(Slot::Terminal, Some("com.system76.CosmicTerm".into()));
+        c.system_panel
+            .set_app(Slot::Terminal, Some("com.system76.CosmicTerm".into()));
         c.system_panel.set_shown(Slot::Terminal, true);
         let back: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
         assert_eq!(
@@ -637,7 +643,10 @@ mod tests {
         c.set_tile_image((0, 0), "  /tmp/pic.png  ");
         let back: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
         assert_eq!(back.groups[0].tiles[0].color.as_deref(), Some("#E81123"));
-        assert_eq!(back.groups[0].tiles[0].image.as_deref(), Some("/tmp/pic.png"));
+        assert_eq!(
+            back.groups[0].tiles[0].image.as_deref(),
+            Some("/tmp/pic.png")
+        );
         c.set_tile_color((0, 0), None);
         c.set_tile_image((0, 0), "   ");
         assert_eq!(c.groups[0].tiles[0].color, None);
@@ -725,7 +734,7 @@ mod tests {
         let c: Config = toml::from_str("").unwrap();
         assert_eq!(
             (c.list_mode, c.right_side),
-            (ListMode::Az, RightSide::Tiles)
+            (ListMode::Category, RightSide::Tiles)
         );
         let c: Config =
             toml::from_str("list_mode = \"folders\"\nright_side = \"recent\"\nfinish = \"accent\"")

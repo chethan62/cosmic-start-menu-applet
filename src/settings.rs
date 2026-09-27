@@ -101,7 +101,10 @@ impl Application for Settings {
             let category = slot_category(slot);
             let mut names = vec![fl!("default-auto")];
             let mut ids = Vec::new();
-            for a in apps.iter().filter(|a| a.categories.iter().any(|c| c == category)) {
+            for a in apps
+                .iter()
+                .filter(|a| a.categories.iter().any(|c| c == category))
+            {
                 names.push(a.name.clone());
                 ids.push(a.id.clone());
             }
@@ -148,10 +151,12 @@ impl Application for Settings {
                 self.change(|c| c.locked = on);
             }
             Message::SetDefaultApp(slot, index) => {
-                let id = (index > 0).then(|| {
-                    let n = SLOTS.iter().position(|&s| s == slot).unwrap_or(0);
-                    self.slot_ids[n].get(index - 1).cloned()
-                }).flatten();
+                let id = (index > 0)
+                    .then(|| {
+                        let n = SLOTS.iter().position(|&s| s == slot).unwrap_or(0);
+                        self.slot_ids[n].get(index - 1).cloned()
+                    })
+                    .flatten();
                 self.change(|c| c.system_panel.set_app(slot, id));
             }
             Message::ShowSlot(slot, on) => {
@@ -357,11 +362,9 @@ impl Application for Settings {
                     .align_y(Alignment::Center)
                     .push(text::body(fl!(slot_label(slot))).width(Length::FillPortion(2)))
                     .push(
-                        cosmic::widget::dropdown(
-                            &self.slot_names[n],
-                            Some(selected),
-                            move |i| Message::SetDefaultApp(slot, i),
-                        )
+                        cosmic::widget::dropdown(&self.slot_names[n], Some(selected), move |i| {
+                            Message::SetDefaultApp(slot, i)
+                        })
                         .width(Length::FillPortion(3)),
                     )
                     .push(

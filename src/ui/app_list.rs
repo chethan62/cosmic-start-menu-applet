@@ -314,6 +314,9 @@ pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
             az(col, apps::sections_of(list, v.loose))
         }
     };
+    // Last row of the list, under every section: Settings belongs with the
+    // apps rather than pinned beneath them.
+    col = col.push(settings_row());
     scrollable(container(col).padding([0, 8, 0, 0]))
         .id(v.list_id)
         .width(Length::Fixed(LIST_WIDTH))
@@ -321,14 +324,11 @@ pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
         .into()
 }
 
-/// The fixed "Start Menu Settings" entry pinned under the app list: always
-/// there, never scrolled away, and drawn like the system rail's entries — a
-/// monochrome symbolic glyph — rather than like an installed app.
+/// The "Start Menu Settings" entry: the last row of the app list, drawn like
+/// any installed app so it reads as one more item rather than a fixture.
 pub fn settings_row<'a>() -> Element<'a, Message> {
     let body = row::with_children(vec![
-        container(icon::from_name("emblem-system-symbolic").symbolic(true).size(18))
-            .center(Length::Fixed(f32::from(ICON)))
-            .into(),
+        icon::from_name("preferences-system").size(ICON).into(),
         text::body(fl!("menu-settings"))
             .wrapping(cosmic::iced::widget::text::Wrapping::None)
             .into(),
