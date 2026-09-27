@@ -312,6 +312,29 @@ pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
         .into()
 }
 
+/// The fixed "Start Menu Settings" entry pinned under the app list: always
+/// there, never scrolled away, and drawn like the system rail's entries — a
+/// monochrome symbolic glyph — rather than like an installed app.
+pub fn settings_row<'a>() -> Element<'a, Message> {
+    let body = row::with_children(vec![
+        container(icon::from_name("emblem-system-symbolic").symbolic(true).size(18))
+            .center(Length::Fixed(f32::from(ICON)))
+            .into(),
+        text::body(fl!("menu-settings"))
+            .wrapping(cosmic::iced::widget::text::Wrapping::None)
+            .into(),
+    ])
+    .spacing(12)
+    .align_y(Alignment::Center);
+    button::custom(centred(body))
+        .class(quiet_button())
+        .padding([0, 10])
+        .width(Length::Fill)
+        .height(Length::Fixed(ROW_HEIGHT))
+        .on_press(Message::OpenSettings)
+        .into()
+}
+
 /// The Category view's jump grid: two columns of category names.
 pub fn category_grid<'a>(present: &[&'static str]) -> Element<'a, Message> {
     let rows = present.chunks(2).map(|chunk| {

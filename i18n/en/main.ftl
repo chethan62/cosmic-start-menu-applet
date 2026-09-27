@@ -99,3 +99,4 @@ fav-remove = Remove from favourites
 fav-note = Same list as your dock.
 recent-note = Apps you opened recently.
 nothing-yet = Nothing here yet.
+menu-settings = Start Menu Settings

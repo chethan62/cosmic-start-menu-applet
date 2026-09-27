@@ -1154,14 +1154,12 @@ impl Application for App {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let button = self
-            .core
+        // No right-click menu: a missed left-click kept opening Settings,
+        // which now lives at the bottom of the app list instead.
+        self.core
             .applet
             .icon_button(&self.config.panel_icon)
-            .on_press(Message::TogglePopup);
-        // Right-click opens Settings, as other panel items do.
-        mouse_area(button)
-            .on_right_press(Message::OpenSettings)
+            .on_press(Message::TogglePopup)
             .into()
     }
 
@@ -1182,6 +1180,7 @@ impl Application for App {
             column::with_children(vec![
                 search.into(),
                 ui::app_list::results_view(&self.apps, &hits, &self.found, selected, &self.query),
+                ui::app_list::settings_row(),
             ])
             .spacing(spacing.section)
             .width(Length::Fill)
@@ -1218,6 +1217,10 @@ impl Application for App {
                             list_id: self.list_id.clone(),
                         })
                     },
+                    // Pinned under the list, always in reach and never
+                    // scrolled away; it replaced the panel button's
+                    // miss-click-prone right-click.
+                    ui::app_list::settings_row(),
                 ])
                 .spacing(spacing.section)
                 .into(),
