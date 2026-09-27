@@ -353,6 +353,13 @@ fn found_row<'a>(item: &'a Item, selected: bool) -> Element<'a, Message> {
     let body = row::with_children(vec![glyph, words.into()])
         .spacing(12)
         .align_y(Alignment::Center);
+    // Same height as an app row unless there is a second line, so the
+    // hover and selection fills match the rows they sit on.
+    let height = if item.description.is_empty() {
+        ROW_HEIGHT
+    } else {
+        ROW_HEIGHT + 12.0
+    };
     button::custom(centred(body))
         .class(if selected {
             selected_button()
@@ -361,7 +368,7 @@ fn found_row<'a>(item: &'a Item, selected: bool) -> Element<'a, Message> {
         })
         .padding([0, 10])
         .width(Length::Fill)
-        .height(Length::Fixed(ROW_HEIGHT + 12.0))
+        .height(Length::Fixed(height))
         .on_press(Message::LauncherActivate(item.id))
         .into()
 }
@@ -397,7 +404,12 @@ pub fn results_view<'a>(
         }
         rows.push(found_row(item, hits.len() + n == selected));
     }
-    scrollable(column::with_children(rows))
+    // The same right inset the browse list has, so the hover and selection
+    // fills stop short of the popup edge and the scrollbar instead of
+    // running underneath them; a hair of spacing keeps adjacent fills from
+    // welding into one block. (No jump-scrolling here, so the spacing does
+    // not upset any offset arithmetic.)
+    scrollable(container(column::with_children(rows).spacing(2)).padding([0, 8, 0, 0]))
         .height(Length::Fill)
         .into()
 }
