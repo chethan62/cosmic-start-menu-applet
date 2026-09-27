@@ -14,12 +14,15 @@ use cosmic::widget::{
 };
 use cosmic::Element;
 
-use crate::app::{Message, Target};
+use crate::app::{Message, Target, TileField};
 use crate::apps::App;
 use crate::config::{Config, RightSide, TileFinish, TileRef, TileSize};
 use crate::fl;
 use crate::tile_layout;
-use crate::ui::{menu_card, quiet_button, selected_button, tile_button_class, Spacing};
+use crate::ui::{
+    colored_tile_class, image_tile_class, menu_card, parse_hex, quiet_button, selected_button,
+    tile_button_class, Spacing,
+};
 
 /// One grid cell. Small tiles are one cell, Medium 2×2, Wide 4×2.
 pub const CELL: f32 = 44.0;
@@ -59,9 +62,15 @@ struct TileArgs<'a> {
     size: TileSize,
     dims: (f32, f32),
     finish: TileFinish,
+    /// The tile's own fill, already parsed, over the finish.
+    color: Option<cosmic::iced::Color>,
+    /// A picture behind the tile, when its file exists.
+    image: Option<&'a str>,
+    /// Whether Medium and Wide tiles draw their name.
+    show_name: bool,
     edit: Edit,
-    /// The draft text while this tile is being renamed.
-    renaming: Option<&'a str>,
+    /// The field and draft text while this tile's inline input is open.
+    renaming: Option<(TileField, &'a str)>,
 }
 
 fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
@@ -72,6 +81,9 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         size,
         dims: (w, h),
         finish,
+        color,
+        image,
+        show_name,
         edit,
         renaming,
     } = args;
@@ -79,9 +91,13 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         TileSize::Small => 24,
         TileSize::Medium | TileSize::Wide => 32,
     });
-    // Mid-rename the tile is the input, whatever its size.
-    if let Some(draft) = renaming {
-        let input = text_input::text_input(fl!("tile-name"), draft)
+    // Mid-edit the tile is the input, whatever its size.
+    if let Some((field, draft)) = renaming {
+        let placeholder = match field {
+            TileField::Label => fl!("tile-name"),
+            TileField::Image => fl!("tile-image"),
+        };
+        let input = text_input::text_input(placeholder, draft)
             .id(rename_input_id())
             .on_input(Message::RenameText)
             .on_submit(|_| Message::RenameDone);
@@ -93,7 +109,7 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
     let content: Element<'a, Message> = match size {
         TileSize::Small => container(glyph).center(Length::Fill).into(),
         // Name along the bottom edge, icon centred above it, as Windows does.
-        TileSize::Medium | TileSize::Wide => column::with_children(vec![
+        TileSize::Medium | TileSize::Wide if show_name => column::with_children(vec![
             container(glyph)
                 .center_x(Length::Fill)
                 .center_y(Length::Fill)
@@ -104,12 +120,17 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         ])
         .align_x(Alignment::Start)
         .into(),
+        TileSize::Medium | TileSize::Wide => container(glyph).center(Length::Fill).into(),
     };
     let class = if edit.picked == Some(at) {
         selected_button()
     } else if edit.on {
         // An edge on every tile says "these move now" without a new colour.
         tile_button_class(TileFinish::Outline)
+    } else if image.is_some() {
+        image_tile_class()
+    } else if let Some(fill) = color {
+        colored_tile_class(fill)
     } else {
         tile_button_class(finish)
     };
@@ -126,8 +147,24 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         } else {
             Message::LaunchId(app.id.clone())
         });
+    // The picture sits in a layer under the button, cropped to the tile.
+    let button: Element<'a, Message> = match image {
+        Some(path) => {
+            let picture = container(
+                cosmic::widget::image(cosmic::widget::image::Handle::from_path(path))
+                    .content_fit(cosmic::iced::ContentFit::Cover)
+                    .width(Length::Fixed(w))
+                    .height(Length::Fixed(h)),
+            )
+            .clip(true)
+            .width(Length::Fixed(w))
+            .height(Length::Fixed(h));
+            stack(vec![picture.into(), button.into()]).into()
+        }
+        None => button.into(),
+    };
     if edit.on {
-        return button.into();
+        return button;
     }
     mouse_area(button)
         .on_right_press(Message::OpenContext(Target::Tile(at)))
@@ -184,8 +221,8 @@ pub struct RightView<'a> {
     pub favs: &'a [String],
     pub recent: &'a [String],
     pub menu_open: bool,
-    /// A tile mid-rename, with the text as typed so far.
-    pub renaming: Option<&'a (TileRef, String)>,
+    /// A tile field mid-edit, with the text as typed so far.
+    pub renaming: Option<&'a (TileRef, TileField, String)>,
 }
 
 fn side_key(side: RightSide) -> &'static str {
@@ -325,13 +362,19 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
             };
             let name = t.label.as_deref().unwrap_or(&app.name);
             let draft = renaming
-                .filter(|(rat, _)| *rat == (g, *ti))
-                .map(|(_, s)| s.as_str());
+                .filter(|(rat, _, _)| *rat == (g, *ti))
+                .map(|(_, field, s)| (*field, s.as_str()));
             let at = (
                 f32::from(p.col) * (CELL + gap),
                 f32::from(p.row) * (CELL + gap),
             );
             let dims = (span(p.cols, gap), span(p.rows, gap));
+            // Only a picture that is actually there: a moved or deleted
+            // file falls back to the finish rather than an empty tile.
+            let picture = t
+                .image
+                .as_deref()
+                .filter(|p| std::path::Path::new(p).is_file());
             layer.push(
                 pin(tile(TileArgs {
                     at: (g, *ti),
@@ -340,6 +383,9 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
                     size: t.size,
                     dims,
                     finish: config.finish,
+                    color: t.color.as_deref().and_then(parse_hex),
+                    image: picture,
+                    show_name: config.show_tile_names,
                     edit,
                     renaming: draft,
                 }))

@@ -148,8 +148,9 @@ pub struct App {
     recent: Vec<String>,
     right_menu: bool,
     avatar: Avatar,
-    /// A tile mid-rename, and the name as typed so far.
-    renaming: Option<(TileRef, String)>,
+    /// A tile field mid-edit — its name or its picture path — and the text
+    /// as typed so far. One at a time, like the rename it grew from.
+    renaming: Option<(TileRef, TileField, String)>,
     /// The launcher's results for the current query, beyond apps.
     found: Vec<crate::launcher::Item>,
 }
@@ -214,6 +215,15 @@ fn load_avatar() -> Avatar {
     Avatar { image, initial }
 }
 
+/// Which of a tile's text fields the inline input is editing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TileField {
+    /// The tile's own name, over the app's.
+    Label,
+    /// The path of the picture drawn behind the tile.
+    Image,
+}
+
 /// What a right-click menu is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
@@ -257,8 +267,14 @@ pub enum Message {
     LauncherActivate(u32),
     /// Start renaming a tile (from its right-click menu).
     RenameTile(TileRef),
+    /// Start typing a picture path for a tile (from its right-click menu).
+    EditTileImage(TileRef),
     RenameText(String),
     RenameDone,
+    /// Set or clear a tile's own fill colour.
+    TileColor(TileRef, Option<String>),
+    /// Take the picture off a tile.
+    ClearTileImage(TileRef),
     /// Ctrl+1..9: launch the n'th pinned tile.
     TileNumber(usize),
     PopupClosed(Id),
@@ -959,21 +975,40 @@ impl Application for App {
                         })
                     })
                     .unwrap_or_default();
-                self.renaming = Some((at, current));
+                self.renaming = Some((at, TileField::Label, current));
+                text_input::focus(ui::tiles::rename_input_id())
+            }
+            Message::EditTileImage(at) => {
+                self.context = None;
+                let current = self
+                    .config
+                    .groups
+                    .get(at.0)
+                    .and_then(|g| g.tiles.get(at.1))
+                    .and_then(|t| t.image.clone())
+                    .unwrap_or_default();
+                self.renaming = Some((at, TileField::Image, current));
                 text_input::focus(ui::tiles::rename_input_id())
             }
             Message::RenameText(t) => {
-                if let Some((_, draft)) = &mut self.renaming {
+                if let Some((_, _, draft)) = &mut self.renaming {
                     *draft = t;
                 }
                 Task::none()
             }
             Message::RenameDone => {
-                let Some((at, name)) = self.renaming.take() else {
+                let Some((at, field, text)) = self.renaming.take() else {
                     return Task::none();
                 };
-                self.edit(move |c| c.rename(at, &name))
+                match field {
+                    TileField::Label => self.edit(move |c| c.rename(at, &text)),
+                    TileField::Image => self.edit(move |c| c.set_tile_image(at, &text)),
+                }
             }
+            Message::TileColor(at, color) => {
+                self.edit(move |c| c.set_tile_color(at, color.clone()))
+            }
+            Message::ClearTileImage(at) => self.edit(move |c| c.set_tile_image(at, "")),
             Message::TileNumber(n) => {
                 let installed: std::collections::HashSet<&str> =
                     self.apps.iter().map(|a| a.id.as_str()).collect();

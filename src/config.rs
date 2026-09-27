@@ -99,9 +99,29 @@ pub struct Tile {
     /// The user's own name for the tile, over the app's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// The tile's own fill, `#rrggbb`, over the theme's finish.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// A picture drawn as the tile's background, by path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     /// Live-tile content source. Reserved for v2: parsed and preserved, never drawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+}
+
+impl Tile {
+    /// A plain Medium tile, as pinning makes it.
+    pub fn medium(app: impl Into<String>) -> Self {
+        Self {
+            app: app.into(),
+            size: TileSize::Medium,
+            label: None,
+            color: None,
+            image: None,
+            source: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +141,8 @@ pub struct Config {
     /// Tiles/Favourites/Recent switch and the tile Edit toggle — so the
     /// layout only changes from the Settings window.
     pub locked: bool,
+    /// Whether Medium and Wide tiles draw their name along the bottom.
+    pub show_tile_names: bool,
     pub list_mode: ListMode,
     pub right_side: RightSide,
     /// Medium tiles across a group: 2 or 3.
@@ -139,6 +161,7 @@ impl Default for Config {
             finish: TileFinish::Frosted,
             show_most_used: true,
             locked: false,
+            show_tile_names: true,
             list_mode: ListMode::Az,
             right_side: RightSide::Tiles,
             tile_columns: 3,
@@ -171,6 +194,8 @@ const HEADER: &str = "\
 # `panel_icon` is any installed icon name. `menu_position` places the
 # Super-key menu: corner | top | centre. `[search]` toggles result sections.
 # `locked` hides the menu's own view switches; use the Settings window.
+# A tile's `color` is `#rrggbb` and `image` a picture's path; either wins
+# over `finish`. `show_tile_names` hides tile captions when false.
 ";
 
 /// The dock's favourites file is a RON list of strings. Pull the quoted
@@ -247,14 +272,7 @@ impl Config {
         }
         Config {
             groups: vec![default_group(
-                ids.into_iter()
-                    .map(|app| Tile {
-                        app,
-                        size: TileSize::Medium,
-                        label: None,
-                        source: None,
-                    })
-                    .collect(),
+                ids.into_iter().map(Tile::medium).collect(),
             )],
             ..Config::default()
         }
@@ -341,10 +359,29 @@ impl Config {
     }
 
     /// Set or clear a tile's own name; blank clears back to the app's.
-    pub fn rename(&mut self, (g, t): TileRef, name: &str) {
-        if let Some(tile) = self.groups.get_mut(g).and_then(|g| g.tiles.get_mut(t)) {
+    pub fn rename(&mut self, at: TileRef, name: &str) {
+        if let Some(tile) = self.tile_mut(at) {
             let name = name.trim();
             tile.label = (!name.is_empty()).then(|| name.to_owned());
+        }
+    }
+
+    fn tile_mut(&mut self, (g, t): TileRef) -> Option<&mut Tile> {
+        self.groups.get_mut(g).and_then(|g| g.tiles.get_mut(t))
+    }
+
+    /// Set or clear a tile's own fill colour (`#rrggbb`).
+    pub fn set_tile_color(&mut self, at: TileRef, color: Option<String>) {
+        if let Some(tile) = self.tile_mut(at) {
+            tile.color = color;
+        }
+    }
+
+    /// Set or clear the picture behind a tile; a blank path clears it.
+    pub fn set_tile_image(&mut self, at: TileRef, path: &str) {
+        if let Some(tile) = self.tile_mut(at) {
+            let path = path.trim();
+            tile.image = (!path.is_empty()).then(|| path.to_owned());
         }
     }
 
@@ -385,12 +422,7 @@ impl Config {
         if self.groups.is_empty() {
             self.groups.push(default_group(Vec::new()));
         }
-        self.groups[0].tiles.push(Tile {
-            app: app.into(),
-            size: TileSize::Medium,
-            label: None,
-            source: None,
-        });
+        self.groups[0].tiles.push(Tile::medium(app));
     }
 
     pub fn unpin(&mut self, app: &str) {
@@ -491,6 +523,23 @@ mod tests {
     }
 
     #[test]
+    fn tile_colour_and_image_set_clear_and_round_trip() {
+        let mut c = Config::seeded(&installed(&["chromium"]), None);
+        c.set_tile_color((0, 0), Some("#E81123".into()));
+        c.set_tile_image((0, 0), "  /tmp/pic.png  ");
+        let back: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back.groups[0].tiles[0].color.as_deref(), Some("#E81123"));
+        assert_eq!(back.groups[0].tiles[0].image.as_deref(), Some("/tmp/pic.png"));
+        c.set_tile_color((0, 0), None);
+        c.set_tile_image((0, 0), "   ");
+        assert_eq!(c.groups[0].tiles[0].color, None);
+        assert_eq!(c.groups[0].tiles[0].image, None);
+        // Out of range is a no-op, not a panic.
+        c.set_tile_color((7, 7), Some("#000000".into()));
+        c.set_tile_image((7, 7), "x");
+    }
+
+    #[test]
     fn rename_sets_trims_and_clears_and_survives_toml() {
         let mut c = Config::seeded(&installed(&["chromium"]), None);
         c.rename((0, 0), "  Browser  ");
@@ -512,10 +561,8 @@ mod tests {
         c.groups.push(Group {
             name: "Two".into(),
             tiles: vec![Tile {
-                app: "b".into(),
                 size: TileSize::Small,
-                label: None,
-                source: None,
+                ..Tile::medium("b")
             }],
         });
         let inst = installed(&["a", "b"]);
@@ -706,10 +753,8 @@ mod tests {
         c.pin("a");
         let g = c.add_group("Tools".into());
         c.groups[g].tiles.push(Tile {
-            app: "b".into(),
             size: TileSize::Small,
-            label: None,
-            source: None,
+            ..Tile::medium("b")
         });
         c.remove_group(g);
         assert_eq!(c.groups.len(), 1);

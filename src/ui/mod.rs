@@ -120,6 +120,87 @@ fn tile_border(theme: &cosmic::Theme, width: f32) -> Border {
     }
 }
 
+/// `#rrggbb` (or `#rgb`) to a colour; anything else is `None`.
+pub fn parse_hex(s: &str) -> Option<Color> {
+    let hex = s.trim().strip_prefix('#')?;
+    let byte = |a: &str| u8::from_str_radix(a, 16).ok();
+    let (r, g, b) = match hex.len() {
+        6 => (byte(&hex[0..2])?, byte(&hex[2..4])?, byte(&hex[4..6])?),
+        3 => {
+            let d = |i: usize| byte(&hex[i..=i]).map(|v| v * 17);
+            (d(0)?, d(1)?, d(2)?)
+        }
+        _ => return None,
+    };
+    Some(Color::from_rgb8(r, g, b))
+}
+
+/// Whether black text reads better than white on `fill` (WCAG-ish luma).
+fn is_light(c: Color) -> bool {
+    0.299 * c.r + 0.587 * c.g + 0.114 * c.b > 0.6
+}
+
+/// A tile filled with the user's own colour: the colour at rest, a touch
+/// lighter under the pointer, and black or white content by its luma.
+pub fn colored_tile_class(fill: Color) -> button::ButtonClass {
+    fn style(theme: &cosmic::Theme, fill: Color) -> button::Style {
+        let border = tile_border(theme, 0.0);
+        let content = if is_light(fill) {
+            Color::BLACK
+        } else {
+            Color::WHITE
+        };
+        button::Style {
+            background: Some(Background::Color(fill)),
+            border_radius: border.radius,
+            border_width: border.width,
+            border_color: border.color,
+            text_color: Some(content),
+            icon_color: Some(content),
+            ..button::Style::new()
+        }
+    }
+    fn lighten(c: Color, by: f32) -> Color {
+        Color {
+            r: c.r + (1.0 - c.r) * by,
+            g: c.g + (1.0 - c.g) * by,
+            b: c.b + (1.0 - c.b) * by,
+            a: c.a,
+        }
+    }
+
+    button::ButtonClass::Custom {
+        active: Box::new(move |_focused, theme| style(theme, fill)),
+        disabled: Box::new(move |theme| style(theme, fill)),
+        hovered: Box::new(move |_focused, theme| style(theme, lighten(fill, 0.12))),
+        pressed: Box::new(move |_focused, theme| style(theme, lighten(fill, 0.2))),
+    }
+}
+
+/// A tile over its own picture: nothing at rest so the picture shows, the
+/// card's washes under the pointer, and the tile radius throughout.
+pub fn image_tile_class() -> button::ButtonClass {
+    fn base(
+        theme: &cosmic::Theme,
+        fill: Option<cosmic::cosmic_theme::palette::Srgba>,
+    ) -> button::Style {
+        button::Style {
+            background: fill.map(|c| Background::Color(Color::from(c))),
+            border_radius: tile_radius(theme).into(),
+            text_color: None,
+            icon_color: None,
+            ..button::Style::new()
+        }
+    }
+
+    button::ButtonClass::Custom {
+        active: Box::new(|_focused, theme| base(theme, None)),
+        disabled: Box::new(|theme| base(theme, None)),
+        hovered: Box::new(|_focused, theme| base(theme, Some(tile_component(theme).hover))),
+        pressed: Box::new(|_focused, theme| base(theme, Some(tile_component(theme).pressed))),
+    }
+}
+
 /// A tile button in the frost-aware card colour, with that component's hover
 /// and pressed washes. Text and icon colours are left unset so they inherit.
 pub fn tile_button_class(finish: TileFinish) -> button::ButtonClass {
@@ -202,6 +283,30 @@ pub fn selected_button() -> button::ButtonClass {
         disabled: Box::new(|theme| base(theme, 0.24)),
         hovered: Box::new(|_focused, theme| base(theme, 0.32)),
         pressed: Box::new(|_focused, theme| base(theme, 0.4)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_parses_long_short_and_rejects_junk() {
+        let c = parse_hex("#E81123").unwrap();
+        assert!((c.r - 232.0 / 255.0).abs() < 1e-5);
+        assert!((c.b - 35.0 / 255.0).abs() < 1e-5);
+        let short = parse_hex(" #f0a ").unwrap();
+        assert!((short.r - 1.0).abs() < 1e-5);
+        assert!((short.g - 0.0).abs() < 1e-5);
+        for junk in ["", "#", "#12345", "red", "#gggggg", "e81123"] {
+            assert!(parse_hex(junk).is_none(), "{junk:?}");
+        }
+    }
+
+    #[test]
+    fn light_fills_take_black_content_dark_take_white() {
+        assert!(is_light(Color::from_rgb8(255, 185, 0)));
+        assert!(!is_light(Color::from_rgb8(0, 120, 215)));
     }
 }
 

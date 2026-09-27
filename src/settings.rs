@@ -29,6 +29,7 @@ pub enum Message {
     SetSearch(Search),
     SetIcon(String),
     SetLocked(bool),
+    SetTileNames(bool),
     SetListMode(ListMode),
     SetRightSide(RightSide),
     AskReset(bool),
@@ -103,6 +104,9 @@ impl Application for Settings {
             }
             Message::SetLocked(on) => {
                 self.change(|c| c.locked = on);
+            }
+            Message::SetTileNames(on) => {
+                self.change(|c| c.show_tile_names = on);
             }
             Message::SetListMode(mode) => {
                 self.change(|c| c.list_mode = mode);
@@ -289,6 +293,11 @@ impl Application for Settings {
             .push(text::body(fl!("settings-most-used")).width(Length::Fill))
             .push(toggler(self.config.show_most_used).on_toggle(Message::SetMostUsed));
 
+        let tile_names = row::with_capacity(2)
+            .align_y(Alignment::Center)
+            .push(text::body(fl!("settings-tile-names")).width(Length::Fill))
+            .push(toggler(self.config.show_tile_names).on_toggle(Message::SetTileNames));
+
         let reset: Element<'_, Message> = if self.confirm_reset {
             row::with_capacity(3)
                 .spacing(space)
@@ -330,6 +339,7 @@ impl Application for Settings {
             .push(icon_pick)
             .push(divider::horizontal::default())
             .push(most_used)
+            .push(tile_names)
             .push(divider::horizontal::default())
             .push(reset)
             .push(status)
