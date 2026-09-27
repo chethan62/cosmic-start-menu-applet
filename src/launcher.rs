@@ -144,9 +144,22 @@ pub fn parse(line: &str) -> Option<Reply> {
 struct Service {
     child: Child,
     stdin: ChildStdin,
+    /// Which start this is, so a reader thread outliving its service
+    /// cannot tear down the one that replaced it.
+    generation: u64,
 }
 
+impl Service {
+    fn reap(mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// No shutdown step is needed when the menu exits: `pop-launcher` quits by
+/// itself once its stdin closes, which the kernel does for us.
 static SERVICE: Mutex<Option<Service>> = Mutex::new(None);
+static STARTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Replies flow from the reader thread (whichever service is current) to the
 /// one subscription that takes the receiver.
 struct Channel {
@@ -182,6 +195,7 @@ fn start() -> Option<Service> {
     let stdin = child.stdin.take()?;
     let stdout = child.stdout.take()?;
     let tx = replies().tx.clone();
+    let generation = STARTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let _ = std::thread::Builder::new()
         .name("pop-launcher-reader".into())
         .spawn(move || {
@@ -191,8 +205,22 @@ fn start() -> Option<Service> {
                     let _ = tx.send(reply);
                 }
             }
+            // End of output: the service died. Reap it now rather than leave
+            // a zombie until the next keystroke finds the pipe broken; the
+            // next search starts a fresh one.
+            if let Ok(mut guard) = SERVICE.lock() {
+                if guard.as_ref().is_some_and(|s| s.generation == generation) {
+                    if let Some(dead) = guard.take() {
+                        dead.reap();
+                    }
+                }
+            }
         });
-    Some(Service { child, stdin })
+    Some(Service {
+        child,
+        stdin,
+        generation,
+    })
 }
 
 /// Send one request, starting the service if needed and once more if the
@@ -215,10 +243,8 @@ fn send(request: &str) {
             return;
         }
         // Broken pipe: reap the dead one and try a fresh one.
-        let mut dead = guard.take().map(|s| s.child);
-        if let Some(child) = dead.as_mut() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(dead) = guard.take() {
+            dead.reap();
         }
     }
 }
