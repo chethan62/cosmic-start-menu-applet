@@ -6,6 +6,7 @@ mod config;
 mod favorites;
 mod folders;
 mod i18n;
+mod instance;
 mod launch;
 mod launcher;
 mod process;

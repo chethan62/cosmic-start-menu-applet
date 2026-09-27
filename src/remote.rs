@@ -40,87 +40,21 @@ impl Service {
 
 static REQUESTS: OnceLock<Mutex<Option<mpsc::UnboundedReceiver<()>>>> = OnceLock::new();
 
-/// What [`claim`] found.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Claim {
-    /// This process is the menu.
-    Ours,
-    /// A menu was already open and has been told to toggle.
-    AlreadyOpen,
-}
+pub use crate::instance::Claim;
 
 /// Become the shortcut menu, or toggle the one already running.
 pub fn claim() -> Claim {
-    let (answer_tx, answer_rx) = std::sync::mpsc::channel();
-    let (tx, rx) = mpsc::unbounded_channel();
-    let started = std::thread::Builder::new()
-        .name("start-menu-remote".into())
-        .spawn(move || {
-            let runtime = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(runtime) => runtime,
-                Err(err) => {
-                    tracing::warn!("no runtime for the toggle service: {err}");
-                    let _ = answer_tx.send(Claim::Ours);
-                    return;
-                }
-            };
-            runtime.block_on(async move {
-                match register(tx).await {
-                    Ok(Some(connection)) => {
-                        let _ = answer_tx.send(Claim::Ours);
-                        // Dropping the connection would release the name.
-                        let _hold = connection;
-                        std::future::pending::<()>().await;
-                    }
-                    Ok(None) => {
-                        let _ = answer_tx.send(Claim::AlreadyOpen);
-                    }
-                    Err(err) => {
-                        tracing::debug!("toggle service unavailable: {err}");
-                        let _ = answer_tx.send(Claim::Ours);
-                    }
-                }
-            });
-        });
-    if let Err(err) = started {
-        tracing::warn!("could not start the toggle service: {err}");
-        return Claim::Ours;
-    }
-    let claim = answer_rx.recv().unwrap_or(Claim::Ours);
-    if claim == Claim::Ours {
-        let _ = REQUESTS.set(Mutex::new(Some(rx)));
+    let (claim, requests) = crate::instance::claim(
+        "start-menu-remote",
+        NAME,
+        PATH,
+        |requests| Service { requests },
+        |connection| async move { RemoteProxy::new(&connection).await?.toggle().await },
+    );
+    if let Some(requests) = requests {
+        let _ = REQUESTS.set(Mutex::new(Some(requests)));
     }
     claim
-}
-
-/// The connection when this process now owns the name; `None` when another
-/// menu does, after asking it to toggle.
-async fn register(requests: mpsc::UnboundedSender<()>) -> zbus::Result<Option<zbus::Connection>> {
-    use zbus::fdo::RequestNameFlags;
-    let connection = zbus::Connection::session().await?;
-    connection
-        .object_server()
-        .at(PATH, Service { requests })
-        .await?;
-    match connection
-        .request_name_with_flags(NAME, RequestNameFlags::DoNotQueue.into())
-        .await
-    {
-        Ok(
-            zbus::fdo::RequestNameReply::PrimaryOwner | zbus::fdo::RequestNameReply::AlreadyOwner,
-        ) => Ok(Some(connection)),
-        // zbus 5 reports a taken name as this error, not as a reply.
-        Ok(_) | Err(zbus::Error::NameTaken) => {
-            if let Err(err) = RemoteProxy::new(&connection).await?.toggle().await {
-                tracing::debug!("could not toggle the open menu: {err}");
-            }
-            Ok(None)
-        }
-        Err(err) => Err(err),
-    }
 }
 
 /// Toggle requests, for the menu's subscription. `None` in the panel applet,
