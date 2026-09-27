@@ -124,8 +124,31 @@ pub struct App {
 /// The account picture, or the initial to draw when there is none.
 #[derive(Debug, Clone, Default)]
 pub struct Avatar {
-    pub image: Option<std::path::PathBuf>,
+    pub image: Option<cosmic::widget::image::Handle>,
     pub initial: String,
+}
+
+/// Decoded pixels rather than a path: COSMIC Settings saves the account
+/// picture in whatever format it got (WebP here), and iced's own loader
+/// does not read them all — a path handle showed the fallback initial even
+/// though Settings displayed the picture fine.
+fn decode_avatar(path: &std::path::Path) -> Option<cosmic::widget::image::Handle> {
+    let decoded = match image::open(path) {
+        Ok(img) => img,
+        Err(e) => {
+            tracing::warn!("could not decode {}: {e}", path.display());
+            return None;
+        }
+    };
+    // Drawn at 28 logical pixels; 128 keeps it crisp on any scale factor
+    // without holding a full-size photo in memory.
+    let small = decoded.thumbnail(128, 128).into_rgba8();
+    let (w, h) = small.dimensions();
+    Some(cosmic::widget::image::Handle::from_rgba(
+        w,
+        h,
+        small.into_raw(),
+    ))
 }
 
 /// AccountsService keeps the picture world-readable under the user's name;
@@ -138,7 +161,8 @@ fn load_avatar() -> Avatar {
         dirs::home_dir().unwrap_or_default().join(".face"),
     ]
     .into_iter()
-    .find(|p| !user.is_empty() && p.is_file());
+    .find(|p| !user.is_empty() && p.is_file())
+    .and_then(|p| decode_avatar(&p));
     let full_name = std::fs::read_to_string("/etc/passwd")
         .ok()
         .and_then(|passwd| {

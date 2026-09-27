@@ -63,7 +63,7 @@ fn avatar_radius(theme: &cosmic::Theme) -> f32 {
 
 fn avatar<'a>(a: &Avatar) -> Element<'a, Message> {
     let inner: Element<'a, Message> = match &a.image {
-        Some(path) => cosmic::widget::image(path.clone())
+        Some(handle) => cosmic::widget::image(handle.clone())
             .content_fit(cosmic::iced::ContentFit::Cover)
             .width(Length::Fixed(AVATAR))
             .height(Length::Fixed(AVATAR))

@@ -32,6 +32,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
 dirs = "6"
+# The account picture from AccountsService is whatever COSMIC Settings saved
+# — on this machine a WebP — and iced's own decoder does not read every
+# format, so the avatar is decoded here and handed over as raw pixels.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "gif"] }
 fluent-bundle = "0.16"
 unic-langid = "0.9"
 tracing = "0.1"
