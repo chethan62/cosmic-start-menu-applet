@@ -7,7 +7,7 @@ use cosmic::iced::{Alignment, Length, Subscription};
 use cosmic::widget::{button, column, container, divider, radio, row, scrollable, text, toggler};
 use cosmic::{Application, ApplicationExt, Element};
 
-use crate::config::{Config, MenuPosition, Search, TileFinish};
+use crate::config::{Config, ListMode, MenuPosition, RightSide, Search, TileFinish};
 use crate::fl;
 
 const WINDOW_WIDTH: f32 = 440.0;
@@ -28,6 +28,9 @@ pub enum Message {
     SetPosition(MenuPosition),
     SetSearch(Search),
     SetIcon(String),
+    SetLocked(bool),
+    SetListMode(ListMode),
+    SetRightSide(RightSide),
     AskReset(bool),
     Reset,
     Present,
@@ -97,6 +100,15 @@ impl Application for Settings {
             }
             Message::SetMostUsed(on) => {
                 self.change(|c| c.show_most_used = on);
+            }
+            Message::SetLocked(on) => {
+                self.change(|c| c.locked = on);
+            }
+            Message::SetListMode(mode) => {
+                self.change(|c| c.list_mode = mode);
+            }
+            Message::SetRightSide(side) => {
+                self.change(|c| c.right_side = side);
             }
             Message::AskReset(ask) => self.confirm_reset = ask,
             Message::Reset => {
@@ -230,6 +242,48 @@ impl Application for Settings {
         }
         icon_pick = icon_pick.push(icon_field);
 
+        let mut list_mode = column::with_capacity(4)
+            .spacing(space / 2)
+            .push(text::title4(fl!("settings-list-mode")));
+        for (value, key) in [
+            (ListMode::Az, "mode-az"),
+            (ListMode::Category, "mode-category"),
+            (ListMode::Folders, "mode-folders"),
+        ] {
+            list_mode = list_mode.push(radio(
+                text::body(fl!(key)),
+                value,
+                Some(self.config.list_mode),
+                Message::SetListMode,
+            ));
+        }
+
+        let mut right_side = column::with_capacity(4)
+            .spacing(space / 2)
+            .push(text::title4(fl!("settings-right-side")));
+        for (value, key) in [
+            (RightSide::Tiles, "right-tiles"),
+            (RightSide::Favourites, "right-favourites"),
+            (RightSide::Recent, "right-recent"),
+        ] {
+            right_side = right_side.push(radio(
+                text::body(fl!(key)),
+                value,
+                Some(self.config.right_side),
+                Message::SetRightSide,
+            ));
+        }
+
+        let locked = column::with_capacity(2)
+            .spacing(space / 2)
+            .push(
+                row::with_capacity(2)
+                    .align_y(Alignment::Center)
+                    .push(text::body(fl!("settings-locked")).width(Length::Fill))
+                    .push(toggler(self.config.locked).on_toggle(Message::SetLocked)),
+            )
+            .push(text::caption(fl!("settings-locked-hint")));
+
         let most_used = row::with_capacity(2)
             .align_y(Alignment::Center)
             .push(text::body(fl!("settings-most-used")).width(Length::Fill))
@@ -256,9 +310,15 @@ impl Application for Settings {
             None => text::caption(fl!("settings-saved")),
         };
 
-        let body = column::with_capacity(16)
+        let body = column::with_capacity(24)
             .spacing(space)
             .padding(space)
+            .push(locked)
+            .push(divider::horizontal::default())
+            .push(list_mode)
+            .push(divider::horizontal::default())
+            .push(right_side)
+            .push(divider::horizontal::default())
             .push(finish)
             .push(divider::horizontal::default())
             .push(columns)

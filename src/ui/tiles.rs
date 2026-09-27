@@ -291,22 +291,24 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
         menu_open,
         renaming,
     } = v;
-    let switch = side_switch(config.right_side, menu_open);
     let cells = config.tile_cells();
     let width = Length::Fixed(column_width(spacing, cells));
+    // Locked, the column keeps its content but loses its controls: no
+    // Tiles/Favourites/Recent switch and no Edit toggle. Settings owns them.
+    let switch = |grid: Element<'a, Message>| -> Element<'a, Message> {
+        let mut col = column::with_capacity(2).spacing(spacing.gap);
+        if !config.locked {
+            col = col.push(side_switch(config.right_side, menu_open));
+        }
+        col.push(grid).width(width).into()
+    };
     match config.right_side {
         RightSide::Tiles => {}
         RightSide::Favourites => {
-            return column::with_children(vec![switch, app_grid(favs, apps, fl!("fav-note"))])
-                .spacing(spacing.gap)
-                .width(width)
-                .into();
+            return switch(app_grid(favs, apps, fl!("fav-note")));
         }
         RightSide::Recent => {
-            return column::with_children(vec![switch, app_grid(recent, apps, fl!("recent-note"))])
-                .spacing(spacing.gap)
-                .width(width)
-                .into();
+            return switch(app_grid(recent, apps, fl!("recent-note")));
         }
     }
     let gap = f32::from(spacing.gap);
@@ -375,6 +377,12 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
         );
     }
 
+    if config.locked {
+        return column::with_children(vec![scrollable(groups).height(Length::Fill).into()])
+            .width(width)
+            .into();
+    }
+
     let toggle = button::custom(text::body(if edit.on {
         fl!("edit-done")
     } else {
@@ -390,7 +398,7 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
 
     column::with_children(vec![
         row::with_children(vec![
-            switch,
+            side_switch(config.right_side, menu_open),
             Space::new().width(Length::Fill).into(),
             toggle.into(),
         ])

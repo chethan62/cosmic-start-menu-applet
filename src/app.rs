@@ -1189,7 +1189,11 @@ impl Application for App {
             row::with_children(vec![
                 column::with_children(vec![
                     search.width(Length::Fixed(ui::LIST_WIDTH)).into(),
-                    ui::app_list::list_bar(self.config.list_mode, self.mode_menu),
+                    ui::app_list::list_bar(
+                        self.config.list_mode,
+                        self.mode_menu,
+                        self.config.locked,
+                    ),
                     if self.letter_grid && self.config.list_mode == ListMode::Category {
                         let present: Vec<&'static str> = crate::apps::category_sections(&self.apps)
                             .into_iter()

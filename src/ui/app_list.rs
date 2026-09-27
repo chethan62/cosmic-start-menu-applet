@@ -151,8 +151,17 @@ fn mode_key(mode: ListMode) -> &'static str {
     }
 }
 
-/// "All apps" and the switch between A–Z, Category and Folders.
-pub fn list_bar<'a>(mode: ListMode, menu_open: bool) -> Element<'a, Message> {
+/// "All apps" and the switch between A–Z, Category and Folders. Locked, the
+/// switch is not drawn at all: the sort only changes from Settings.
+pub fn list_bar<'a>(mode: ListMode, menu_open: bool, locked: bool) -> Element<'a, Message> {
+    if locked {
+        return row::with_children(vec![container(text::caption(fl!("all-apps")))
+            .padding([0, 10])
+            .into()])
+        .align_y(Alignment::Center)
+        .width(Length::Fixed(LIST_WIDTH))
+        .into();
+    }
     let label = row::with_children(vec![
         text::body(fl!(mode_key(mode))).into(),
         icon::from_name("pan-down-symbolic").size(12).into(),

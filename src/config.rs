@@ -117,6 +117,10 @@ pub struct Group {
 pub struct Config {
     pub finish: TileFinish,
     pub show_most_used: bool,
+    /// Locked hides the in-menu view controls — the list-sort switch, the
+    /// Tiles/Favourites/Recent switch and the tile Edit toggle — so the
+    /// layout only changes from the Settings window.
+    pub locked: bool,
     pub list_mode: ListMode,
     pub right_side: RightSide,
     /// Medium tiles across a group: 2 or 3.
@@ -134,6 +138,7 @@ impl Default for Config {
         Self {
             finish: TileFinish::Frosted,
             show_most_used: true,
+            locked: false,
             list_mode: ListMode::Az,
             right_side: RightSide::Tiles,
             tile_columns: 3,
@@ -165,6 +170,7 @@ const HEADER: &str = "\
 # `tile_columns` is how many Medium tiles fit across a group: 2 or 3.
 # `panel_icon` is any installed icon name. `menu_position` places the
 # Super-key menu: corner | top | centre. `[search]` toggles result sections.
+# `locked` hides the menu's own view switches; use the Settings window.
 ";
 
 /// The dock's favourites file is a RON list of strings. Pull the quoted

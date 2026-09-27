@@ -100,3 +100,7 @@ fav-note = Same list as your dock.
 recent-note = Apps you opened recently.
 nothing-yet = Nothing here yet.
 menu-settings = Start Menu Settings
+settings-locked = Lock menu layout
+settings-locked-hint = Hides the sort, side-panel and tile-edit switches inside the menu; change the layout here instead.
+settings-list-mode = App list order
+settings-right-side = Right-hand panel
