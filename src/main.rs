@@ -14,6 +14,7 @@ mod remote;
 mod search;
 mod session;
 mod settings;
+mod shortcut;
 mod single_instance;
 mod tile_layout;
 mod ui;
@@ -43,7 +44,7 @@ fn main() -> cosmic::iced::Result {
         if remote::claim() == remote::Claim::AlreadyOpen {
             return Ok(());
         }
-        return cosmic::app::run::<app::App>(app::window_settings(), app::Mode::Shortcut);
+        return cosmic::app::run::<app::App>(shortcut::window_settings(), app::Mode::Shortcut);
     }
 
     cosmic::applet::run::<app::App>(app::Mode::Panel)

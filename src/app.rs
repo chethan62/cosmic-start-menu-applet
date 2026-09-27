@@ -34,7 +34,7 @@ fn popup_width(spacing: Spacing, cells: u16) -> f32 {
 /// The popup's size, for both the Wayland positioner and libcosmic's popup
 /// frame. The frame (`popup_container`) clamps to 360 wide by default, which
 /// is a Control-Center-sized popup; left alone it hides the tile column.
-fn popup_limits(width: f32) -> Limits {
+pub(crate) fn popup_limits(width: f32) -> Limits {
     Limits::NONE
         .min_width(width)
         .max_width(width)
@@ -50,74 +50,6 @@ pub enum Mode {
     /// `--toggle` from a keyboard shortcut: the menu as a layer surface of
     /// its own, open from the start, and the process ends when it closes.
     Shortcut,
-}
-
-/// Window settings for [`Mode::Shortcut`]: no window of its own, only the
-/// layer surface the menu opens.
-pub fn window_settings() -> cosmic::app::Settings {
-    cosmic::app::Settings::default()
-        .no_main_window(true)
-        .transparent(true)
-        .exit_on_close(false)
-        .debug(false)
-}
-
-/// How long a closed shortcut menu lingers before exiting, so a launch it
-/// started has been handed off, and a quick second press can reopen it.
-const LINGER: std::time::Duration = std::time::Duration::from_millis(1500);
-
-/// The shortcut menu's surface: bottom-left, just above the panel (the
-/// compositor keeps it out of the panel's reserved strip). It has to hold
-/// the keyboard outright: asked for on demand, COSMIC left focus where it
-/// was. A full-screen transparent surface catching click-away was tried and
-/// dropped: COSMIC blurred the whole screen behind it.
-fn shortcut_surface(id: Id, width: f32) -> Task<Message> {
-    use cosmic::iced::platform_specific::shell::commands::layer_surface::{
-        get_layer_surface, Anchor, KeyboardInteractivity, Layer,
-    };
-    use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
-        IcedMargin, IcedOutput, SctkLayerSurfaceSettings,
-    };
-    get_layer_surface(SctkLayerSurfaceSettings {
-        id,
-        layer: Layer::Top,
-        keyboard_interactivity: KeyboardInteractivity::Exclusive,
-        input_zone: None,
-        anchor: Anchor::BOTTOM | Anchor::LEFT,
-        output: IcedOutput::Active,
-        namespace: "start-menu".into(),
-        margin: IcedMargin {
-            top: 0,
-            right: 0,
-            bottom: EDGE,
-            left: EDGE,
-        },
-        size: Some((Some(width as u32), Some(POPUP_HEIGHT as u32))),
-        exclusive_zone: 0,
-        size_limits: popup_limits(width),
-    })
-}
-
-/// Gap between the shortcut menu and the screen edge / panel.
-const EDGE: i32 = 4;
-
-/// The menu's card, as `popup_container` paints it, for the shortcut menu:
-/// `popup_container` is an autosize widget that resizes the panel's popup,
-/// and has no business resizing a layer surface.
-fn card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
-    let cosmic = theme.cosmic();
-    let background = cosmic.background(theme.transparent);
-    cosmic::widget::container::Style {
-        text_color: Some(background.on.into()),
-        icon_color: Some(background.on.into()),
-        background: Some(cosmic::iced::Color::from(background.base).into()),
-        border: cosmic::iced::Border {
-            radius: cosmic.corner_radii.radius_m.into(),
-            width: 1.0,
-            color: background.divider.into(),
-        },
-        ..Default::default()
-    }
 }
 
 pub struct App {
@@ -390,7 +322,7 @@ impl App {
                 settings.positioner.size_limits = popup_limits(self.width());
                 cosmic::iced::platform_specific::shell::commands::popup::get_popup(settings)
             }
-            Mode::Shortcut => shortcut_surface(id, self.width()),
+            Mode::Shortcut => crate::shortcut::surface(id, self.width()),
         };
 
         // Re-read apps, history and config on every open, off-thread:
@@ -447,7 +379,7 @@ impl App {
             }
             Mode::Shortcut => {
                 let generation = self.opened;
-                let exit = Task::perform(tokio::time::sleep(LINGER), move |()| {
+                let exit = Task::perform(tokio::time::sleep(crate::shortcut::LINGER), move |()| {
                     cosmic::action::app(Message::Exit(generation))
                 });
                 Task::batch([
@@ -1146,7 +1078,9 @@ impl Application for App {
         }
         if self.mode == Mode::Shortcut {
             return container(with_menu)
-                .class(cosmic::theme::Container::custom(card_style))
+                .class(cosmic::theme::Container::custom(
+                    crate::shortcut::card_style,
+                ))
                 .into();
         }
         self.core
