@@ -167,7 +167,13 @@ pub struct Avatar {
 /// does not read them all — a path handle showed the fallback initial even
 /// though Settings displayed the picture fine.
 fn decode_avatar(path: &std::path::Path) -> Option<cosmic::widget::image::Handle> {
-    let decoded = match image::open(path) {
+    // Sniff the format from the bytes: AccountsService icons have no file
+    // extension, so the extension-based `image::open` cannot name a format.
+    let decoded = image::ImageReader::open(path)
+        .and_then(|r| r.with_guessed_format())
+        .map_err(image::ImageError::IoError)
+        .and_then(|r| r.decode());
+    let decoded = match decoded {
         Ok(img) => img,
         Err(e) => {
             tracing::warn!("could not decode {}: {e}", path.display());
