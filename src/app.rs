@@ -115,6 +115,8 @@ pub struct App {
     recent: Vec<String>,
     right_menu: bool,
     avatar: Avatar,
+    /// A tile mid-rename, and the name as typed so far.
+    renaming: Option<(TileRef, String)>,
     /// The launcher's results for the current query, beyond apps.
     found: Vec<crate::launcher::Item>,
 }
@@ -196,6 +198,12 @@ pub enum Message {
     Launcher(crate::launcher::Reply),
     /// Run one of the launcher's results.
     LauncherActivate(u32),
+    /// Start renaming a tile (from its right-click menu).
+    RenameTile(TileRef),
+    RenameText(String),
+    RenameDone,
+    /// Ctrl+1..9: launch the n'th pinned tile.
+    TileNumber(usize),
     PopupClosed(Id),
     /// Everything read from disk when the popup opens, in one go.
     Loaded(Box<Loaded>),
@@ -283,6 +291,7 @@ fn load() -> Loaded {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Layers {
     context: bool,
+    renaming: bool,
     power: bool,
     mode_menu: bool,
     right_menu: bool,
@@ -296,6 +305,7 @@ struct Layers {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Escape {
     Context,
+    CancelRename,
     Menus,
     LetterGrid,
     DropPick,
@@ -310,6 +320,8 @@ enum Escape {
 fn escape_target(l: Layers) -> Escape {
     if l.context {
         Escape::Context
+    } else if l.renaming {
+        Escape::CancelRename
     } else if l.power || l.mode_menu || l.right_menu {
         Escape::Menus
     } else if l.letter_grid {
@@ -446,6 +458,7 @@ impl App {
     /// Everything that belongs to one opening of the popup. Cleared however
     /// the popup goes away — our own close, Escape, or a click outside.
     fn reset_popup_state(&mut self) {
+        self.renaming = None;
         self.power_open = false;
         self.context = None;
         self.edit = ui::tiles::Edit::default();
@@ -594,6 +607,7 @@ impl Application for App {
             recent: Vec::new(),
             right_menu: false,
             avatar: Avatar::default(),
+            renaming: None,
             found: Vec::new(),
         };
         let open = match mode {
@@ -825,6 +839,7 @@ impl Application for App {
             Message::SearchKey(Key::Escape) => {
                 let layers = Layers {
                     context: self.context.is_some(),
+                    renaming: self.renaming.is_some(),
                     power: self.power_open,
                     mode_menu: self.mode_menu,
                     right_menu: self.right_menu,
@@ -835,6 +850,7 @@ impl Application for App {
                 };
                 match escape_target(layers) {
                     Escape::Context => self.context = None,
+                    Escape::CancelRename => self.renaming = None,
                     Escape::Menus => {
                         self.power_open = false;
                         self.mode_menu = false;
@@ -859,6 +875,49 @@ impl Application for App {
                     Some(Pick::App(n)) => self.update(Message::Launch(hits[n])),
                     Some(Pick::Found(n)) => {
                         self.update(Message::LauncherActivate(self.found[n].id))
+                    }
+                    None => Task::none(),
+                }
+            }
+            Message::RenameTile(at) => {
+                self.context = None;
+                let current = self
+                    .config
+                    .groups
+                    .get(at.0)
+                    .and_then(|g| g.tiles.get(at.1))
+                    .map(|t| {
+                        t.label.clone().unwrap_or_else(|| {
+                            self.apps
+                                .iter()
+                                .find(|a| a.id == t.app)
+                                .map(|a| a.name.clone())
+                                .unwrap_or_default()
+                        })
+                    })
+                    .unwrap_or_default();
+                self.renaming = Some((at, current));
+                text_input::focus(ui::tiles::rename_input_id())
+            }
+            Message::RenameText(t) => {
+                if let Some((_, draft)) = &mut self.renaming {
+                    *draft = t;
+                }
+                Task::none()
+            }
+            Message::RenameDone => {
+                let Some((at, name)) = self.renaming.take() else {
+                    return Task::none();
+                };
+                self.edit(move |c| c.rename(at, &name))
+            }
+            Message::TileNumber(n) => {
+                let installed: std::collections::HashSet<&str> =
+                    self.apps.iter().map(|a| a.id.as_str()).collect();
+                match self.config.nth_tile(&installed, n) {
+                    Some(id) => {
+                        let id = id.to_owned();
+                        self.update(Message::LaunchId(id))
                     }
                     None => Task::none(),
                 }
@@ -1006,6 +1065,18 @@ impl Application for App {
                 Named::Escape => Some(Message::SearchKey(Key::Escape)),
                 _ => None,
             },
+            // Ctrl+1..9 launches a pinned tile. Ctrl, because bare digits
+            // belong to the search box ("0 A.D." is a real query).
+            cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
+                key: KeyCode::Character(c),
+                modifiers,
+                ..
+            }) if modifiers.control() => c
+                .chars()
+                .next()
+                .and_then(|d| d.to_digit(10))
+                .filter(|d| (1..=9).contains(d))
+                .map(|d| Message::TileNumber(d as usize)),
             _ => None,
         });
         if self.mode == Mode::Panel {
@@ -1095,6 +1166,7 @@ impl Application for App {
                     favs: &self.favs,
                     recent: &self.recent,
                     menu_open: self.right_menu,
+                    renaming: self.renaming.as_ref(),
                 }),
             ])
             .spacing(COLUMN_GAP)
@@ -1152,6 +1224,7 @@ mod tests {
     fn escape_closes_the_topmost_thing_first() {
         let all = Layers {
             context: true,
+            renaming: true,
             power: true,
             mode_menu: true,
             right_menu: true,
@@ -1164,6 +1237,7 @@ mod tests {
         assert_eq!(
             escape_target(Layers {
                 context: false,
+                renaming: false,
                 ..all
             }),
             Escape::Menus
@@ -1240,6 +1314,27 @@ mod tests {
                 assert!(popup_width(spacing, cells) >= used);
             }
         }
+    }
+
+    #[test]
+    fn escape_cancels_a_rename_before_anything_below_it() {
+        assert_eq!(
+            escape_target(Layers {
+                renaming: true,
+                query: true,
+                editing: true,
+                ..layers()
+            }),
+            Escape::CancelRename
+        );
+        assert_eq!(
+            escape_target(Layers {
+                context: true,
+                renaming: true,
+                ..layers()
+            }),
+            Escape::Context
+        );
     }
 
     #[test]

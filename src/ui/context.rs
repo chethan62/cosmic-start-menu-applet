@@ -104,6 +104,11 @@ pub fn view<'a>(
                 fl!("ctx-unpin"),
                 Message::Unpin(tile.app.clone()),
             ));
+            items.push(item(
+                "document-edit-symbolic",
+                fl!("ctx-rename"),
+                Message::RenameTile((g, t)),
+            ));
             items.push(divider::horizontal::light().into());
             items.push(label(fl!("ctx-resize")));
             for (size, key) in [

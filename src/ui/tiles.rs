@@ -38,6 +38,11 @@ pub fn column_width(spacing: Spacing, cells: u16) -> f32 {
     grid_width(spacing, cells) + 12.0
 }
 
+/// The rename input's id, so opening it can focus it.
+pub fn rename_input_id() -> cosmic::widget::Id {
+    cosmic::widget::Id::new("tile-rename")
+}
+
 /// Edit mode: tiles are picked up and dropped instead of launched.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Edit {
@@ -45,18 +50,46 @@ pub struct Edit {
     pub picked: Option<TileRef>,
 }
 
-fn tile<'a>(
+/// Everything one tile needs to draw itself.
+struct TileArgs<'a> {
     at: TileRef,
     app: &'a App,
+    /// The user's label if set, else the app's name.
+    name: &'a str,
     size: TileSize,
-    (w, h): (f32, f32),
+    dims: (f32, f32),
     finish: TileFinish,
     edit: Edit,
-) -> Element<'a, Message> {
+    /// The draft text while this tile is being renamed.
+    renaming: Option<&'a str>,
+}
+
+fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
+    let TileArgs {
+        at,
+        app,
+        name,
+        size,
+        dims: (w, h),
+        finish,
+        edit,
+        renaming,
+    } = args;
     let glyph = icon(app.icon.as_cosmic_icon()).size(match size {
         TileSize::Small => 24,
         TileSize::Medium | TileSize::Wide => 32,
     });
+    // Mid-rename the tile is the input, whatever its size.
+    if let Some(draft) = renaming {
+        let input = text_input::text_input(fl!("tile-name"), draft)
+            .id(rename_input_id())
+            .on_input(Message::RenameText)
+            .on_submit(|_| Message::RenameDone);
+        return container(input)
+            .center_y(Length::Fixed(h))
+            .width(Length::Fixed(w))
+            .into();
+    }
     let content: Element<'a, Message> = match size {
         TileSize::Small => container(glyph).center(Length::Fill).into(),
         // Name along the bottom edge, icon centred above it, as Windows does.
@@ -65,7 +98,7 @@ fn tile<'a>(
                 .center_x(Length::Fill)
                 .center_y(Length::Fill)
                 .into(),
-            text::caption(&app.name)
+            text::caption(name)
                 .wrapping(cosmic::iced::widget::text::Wrapping::None)
                 .into(),
         ])
@@ -151,6 +184,8 @@ pub struct RightView<'a> {
     pub favs: &'a [String],
     pub recent: &'a [String],
     pub menu_open: bool,
+    /// A tile mid-rename, with the text as typed so far.
+    pub renaming: Option<&'a (TileRef, String)>,
 }
 
 fn side_key(side: RightSide) -> &'static str {
@@ -254,6 +289,7 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
         favs,
         recent,
         menu_open,
+        renaming,
     } = v;
     let switch = side_switch(config.right_side, menu_open);
     let cells = config.tile_cells();
@@ -285,16 +321,29 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
             let Some(app) = apps.iter().find(|a| a.id == t.app) else {
                 continue;
             };
+            let name = t.label.as_deref().unwrap_or(&app.name);
+            let draft = renaming
+                .filter(|(rat, _)| *rat == (g, *ti))
+                .map(|(_, s)| s.as_str());
             let at = (
                 f32::from(p.col) * (CELL + gap),
                 f32::from(p.row) * (CELL + gap),
             );
             let dims = (span(p.cols, gap), span(p.rows, gap));
             layer.push(
-                pin(tile((g, *ti), app, t.size, dims, config.finish, edit))
-                    .x(at.0)
-                    .y(at.1)
-                    .into(),
+                pin(tile(TileArgs {
+                    at: (g, *ti),
+                    app,
+                    name,
+                    size: t.size,
+                    dims,
+                    finish: config.finish,
+                    edit,
+                    renaming: draft,
+                }))
+                .x(at.0)
+                .y(at.1)
+                .into(),
             );
         }
         groups = groups.push(heading(g, &group.name, spacing, edit));

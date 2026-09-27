@@ -58,6 +58,9 @@ pub struct Tile {
     pub app: String,
     #[serde(default)]
     pub size: TileSize,
+    /// The user's own name for the tile, over the app's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// Live-tile content source. Reserved for v2: parsed and preserved, never drawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -195,6 +198,7 @@ impl Config {
                     .map(|app| Tile {
                         app,
                         size: TileSize::Medium,
+                        label: None,
                         source: None,
                     })
                     .collect(),
@@ -283,6 +287,23 @@ impl Config {
             .map_err(|e| format!("could not replace {}: {e}", path.display()))
     }
 
+    /// Set or clear a tile's own name; blank clears back to the app's.
+    pub fn rename(&mut self, (g, t): TileRef, name: &str) {
+        if let Some(tile) = self.groups.get_mut(g).and_then(|g| g.tiles.get_mut(t)) {
+            let name = name.trim();
+            tile.label = (!name.is_empty()).then(|| name.to_owned());
+        }
+    }
+
+    /// The app on the `n`th visible tile (1-based), counting through the
+    /// groups in order — what Ctrl+`n` launches.
+    pub fn nth_tile(&self, installed: &HashSet<&str>, n: usize) -> Option<&str> {
+        (0..self.groups.len())
+            .flat_map(|g| self.visible_tiles(g, installed))
+            .nth(n.checked_sub(1)?)
+            .map(|(_, t)| t.app.as_str())
+    }
+
     pub fn is_pinned(&self, app: &str) -> bool {
         self.groups
             .iter()
@@ -300,6 +321,7 @@ impl Config {
         self.groups[0].tiles.push(Tile {
             app: app.into(),
             size: TileSize::Medium,
+            label: None,
             source: None,
         });
     }
@@ -379,6 +401,43 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rename_sets_trims_and_clears_and_survives_toml() {
+        let mut c = Config::seeded(&installed(&["chromium"]), None);
+        c.rename((0, 0), "  Browser  ");
+        assert_eq!(c.groups[0].tiles[0].label.as_deref(), Some("Browser"));
+        let back: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
+        assert_eq!(back.groups[0].tiles[0].label.as_deref(), Some("Browser"));
+        c.rename((0, 0), "   ");
+        assert_eq!(c.groups[0].tiles[0].label, None);
+        // Out of range is a no-op, not a panic.
+        c.rename((7, 7), "x");
+    }
+
+    #[test]
+    fn nth_tile_counts_visible_tiles_across_groups() {
+        let mut c = Config::seeded(&installed(&["a", "b"]), None);
+        c.groups[0].tiles = vec![];
+        c.pin("a");
+        c.pin("gone");
+        c.groups.push(Group {
+            name: "Two".into(),
+            tiles: vec![Tile {
+                app: "b".into(),
+                size: TileSize::Small,
+                label: None,
+                source: None,
+            }],
+        });
+        let inst = installed(&["a", "b"]);
+        let inst: HashSet<&str> = inst.iter().map(String::as_str).collect();
+        assert_eq!(c.nth_tile(&inst, 1), Some("a"));
+        // "gone" is not installed, so slot 2 is the next group's tile.
+        assert_eq!(c.nth_tile(&inst, 2), Some("b"));
+        assert_eq!(c.nth_tile(&inst, 3), None);
+        assert_eq!(c.nth_tile(&inst, 0), None);
+    }
+
     #[test]
     fn tile_cells_are_four_or_six_whatever_the_file_says() {
         for (columns, cells) in [(2, 4), (3, 6), (0, 6), (7, 6)] {
@@ -560,6 +619,7 @@ mod tests {
         c.groups[g].tiles.push(Tile {
             app: "b".into(),
             size: TileSize::Small,
+            label: None,
             source: None,
         });
         c.remove_group(g);
