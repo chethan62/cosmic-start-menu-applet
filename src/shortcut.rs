@@ -61,9 +61,13 @@ const EDGE: i32 = 4;
 /// The menu's card, as `popup_container` paints it, for the shortcut menu:
 /// `popup_container` is an autosize widget that resizes the panel's popup,
 /// and has no business resizing a layer surface.
+///
+/// Always the opaque background: the blur request that frosts the panel
+/// popup does not take on this layer surface, and the frosted colour with
+/// nothing blurred behind it left the menu hard to read over windows.
 pub fn card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    let background = cosmic.background(theme.transparent);
+    let background = cosmic.background(false);
     cosmic::widget::container::Style {
         text_color: Some(background.on.into()),
         icon_color: Some(background.on.into()),

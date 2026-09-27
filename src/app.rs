@@ -73,6 +73,9 @@ fn pick(apps: usize, found: usize, selected: usize) -> Option<Pick> {
     })
 }
 
+/// How long the shortcut menu waits after losing the keyboard before closing.
+const FOCUS_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
+
 pub struct App {
     core: Core,
     mode: Mode,
@@ -83,6 +86,9 @@ pub struct App {
     /// reports losing focus once before it first gains it, which is not a
     /// click away.
     had_focus: bool,
+    /// Counts `Unfocused` events, so a `FocusGone` check can tell whether
+    /// focus came back (a `Focused` in between) since it was scheduled.
+    focus_losses: u64,
     popup: Option<Id>,
     config: Config,
     apps: Vec<AppEntry>,
@@ -181,6 +187,9 @@ pub enum Message {
     Focused,
     /// The shortcut menu lost the keyboard, e.g. to a click on a window.
     Unfocused,
+    /// `FOCUS_GRACE` after an `Unfocused`: close if the keyboard has not
+    /// come back since. The number is the `focus_losses` count it belongs to.
+    FocusGone(u64),
     /// A shortcut menu closed `LINGER` ago; exit unless it reopened since.
     Exit(u64),
     /// Something back from COSMIC's launcher service.
@@ -372,8 +381,8 @@ impl App {
         // the popup's surface does not exist yet in this batch, and
         // only the Wayland path parks the request until it does.
         // (Same fix as cosmic-control-center-applet.)
-        // A shortcut menu always asks: its card is translucent either way.
-        if self.mode == Mode::Shortcut || self.core.frosted(self.core.system_theme().cosmic()) {
+        // The shortcut menu's card is opaque instead: see `shortcut::card_style`.
+        if self.mode == Mode::Panel && self.core.frosted(self.core.system_theme().cosmic()) {
             let blur = cosmic::iced::platform_specific::shell::commands::blur::blur(
                 id,
                 Some(vec![cosmic::iced::Rectangle {
@@ -554,6 +563,7 @@ impl Application for App {
             mode,
             opened: 0,
             had_focus: false,
+            focus_losses: 0,
             popup: None,
             config: Config::default(),
             apps: Vec::new(),
@@ -610,7 +620,20 @@ impl Application for App {
                 if !self.had_focus {
                     return Task::none();
                 }
+                // Not closed at once: focus also leaves and comes straight
+                // back when a keyboard device appears (a virtual keyboard, a
+                // layout switch), and that is not a click away.
                 self.had_focus = false;
+                self.focus_losses = self.focus_losses.wrapping_add(1);
+                let loss = self.focus_losses;
+                Task::perform(tokio::time::sleep(FOCUS_GRACE), move |()| {
+                    cosmic::action::app(Message::FocusGone(loss))
+                })
+            }
+            Message::FocusGone(loss) => {
+                if self.had_focus || loss != self.focus_losses {
+                    return Task::none();
+                }
                 self.close_popup()
             }
             Message::Exit(generation) => {
