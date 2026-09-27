@@ -78,6 +78,87 @@ impl Default for Search {
     }
 }
 
+/// A default-app slot on the system rail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    Browser,
+    Files,
+    Terminal,
+    TaskManager,
+}
+
+pub const SLOTS: [Slot; 4] = [Slot::Browser, Slot::Files, Slot::Terminal, Slot::TaskManager];
+
+/// The rail's default-app shortcuts: which app each one launches (a desktop
+/// id; `None` means pick sensibly at launch) and which are shown at all.
+/// Settings and Power are always there and have no entry here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SystemPanel {
+    pub browser: Option<String>,
+    pub file_manager: Option<String>,
+    pub terminal: Option<String>,
+    pub task_manager: Option<String>,
+    pub show_browser: bool,
+    pub show_files: bool,
+    pub show_terminal: bool,
+    pub show_task_manager: bool,
+}
+
+impl Default for SystemPanel {
+    fn default() -> Self {
+        Self {
+            browser: None,
+            file_manager: None,
+            terminal: None,
+            task_manager: None,
+            show_browser: false,
+            // Files has been on the rail since v0.1; the rest are opt-in.
+            show_files: true,
+            show_terminal: false,
+            show_task_manager: false,
+        }
+    }
+}
+
+impl SystemPanel {
+    pub fn app(&self, slot: Slot) -> Option<&str> {
+        match slot {
+            Slot::Browser => self.browser.as_deref(),
+            Slot::Files => self.file_manager.as_deref(),
+            Slot::Terminal => self.terminal.as_deref(),
+            Slot::TaskManager => self.task_manager.as_deref(),
+        }
+    }
+
+    pub fn set_app(&mut self, slot: Slot, id: Option<String>) {
+        match slot {
+            Slot::Browser => self.browser = id,
+            Slot::Files => self.file_manager = id,
+            Slot::Terminal => self.terminal = id,
+            Slot::TaskManager => self.task_manager = id,
+        }
+    }
+
+    pub fn shown(&self, slot: Slot) -> bool {
+        match slot {
+            Slot::Browser => self.show_browser,
+            Slot::Files => self.show_files,
+            Slot::Terminal => self.show_terminal,
+            Slot::TaskManager => self.show_task_manager,
+        }
+    }
+
+    pub fn set_shown(&mut self, slot: Slot, on: bool) {
+        match slot {
+            Slot::Browser => self.show_browser = on,
+            Slot::Files => self.show_files = on,
+            Slot::Terminal => self.show_terminal = on,
+            Slot::TaskManager => self.show_task_manager = on,
+        }
+    }
+}
+
 /// What the right-hand column shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -151,6 +232,7 @@ pub struct Config {
     pub panel_icon: String,
     pub menu_position: MenuPosition,
     pub search: Search,
+    pub system_panel: SystemPanel,
     #[serde(rename = "group")]
     pub groups: Vec<Group>,
 }
@@ -168,6 +250,7 @@ impl Default for Config {
             panel_icon: "start-here-symbolic".into(),
             menu_position: MenuPosition::default(),
             search: Search::default(),
+            system_panel: SystemPanel::default(),
             groups: Vec::new(),
         }
     }
@@ -194,6 +277,8 @@ const HEADER: &str = "\
 # `panel_icon` is any installed icon name. `menu_position` places the
 # Super-key menu: corner | top | centre. `[search]` toggles result sections.
 # `locked` hides the menu's own view switches; use the Settings window.
+# `[system_panel]` picks the rail's default apps (desktop ids) and which
+# of the browser / files / terminal / task-manager shortcuts are shown.
 # A tile's `color` is `#rrggbb` and `image` a picture's path; either wins
 # over `finish`. `show_tile_names` hides tile captions when false.
 ";
@@ -520,6 +605,29 @@ mod tests {
         c.panel_icon = "view-app-grid-symbolic".into();
         let back: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
         assert_eq!(back, c);
+    }
+
+    #[test]
+    fn system_panel_defaults_and_round_trip() {
+        let c = Config::default();
+        assert!(c.system_panel.shown(Slot::Files));
+        for slot in [Slot::Browser, Slot::Terminal, Slot::TaskManager] {
+            assert!(!c.system_panel.shown(slot), "{slot:?}");
+        }
+        let mut c = c;
+        c.system_panel.set_app(Slot::Terminal, Some("com.system76.CosmicTerm".into()));
+        c.system_panel.set_shown(Slot::Terminal, true);
+        let back: Config = toml::from_str(&toml::to_string(&c).unwrap()).unwrap();
+        assert_eq!(
+            back.system_panel.app(Slot::Terminal),
+            Some("com.system76.CosmicTerm")
+        );
+        assert!(back.system_panel.shown(Slot::Terminal));
+        // An old file without the table still loads.
+        assert_eq!(
+            toml::from_str::<Config>("").unwrap().system_panel,
+            SystemPanel::default()
+        );
     }
 
     #[test]

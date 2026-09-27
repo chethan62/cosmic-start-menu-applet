@@ -108,6 +108,18 @@ pub fn open_settings_page(page: Option<&str>) -> Result<(), String> {
     spawn_and_reap(cmd).map(|_| ()).map_err(|e| e.to_string())
 }
 
+/// The desktop id of xdg's default browser, without `.desktop`. A quick
+/// synchronous call: `xdg-settings` only reads a config file.
+pub fn default_browser_id() -> Option<String> {
+    let out = host_command("xdg-settings")
+        .args(["get", "default-web-browser"])
+        .output()
+        .ok()?;
+    let id = String::from_utf8(out.stdout).ok()?;
+    let id = id.trim().trim_end_matches(".desktop");
+    (!id.is_empty()).then(|| id.to_owned())
+}
+
 /// Open the home folder in the default file manager.
 pub fn open_files() -> Result<(), String> {
     let mut cmd = host_command("xdg-open");

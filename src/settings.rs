@@ -7,7 +7,7 @@ use cosmic::iced::{Alignment, Length, Subscription};
 use cosmic::widget::{button, column, container, divider, radio, row, scrollable, text, toggler};
 use cosmic::{Application, ApplicationExt, Element};
 
-use crate::config::{Config, ListMode, MenuPosition, RightSide, Search, TileFinish};
+use crate::config::{Config, ListMode, MenuPosition, RightSide, Search, Slot, TileFinish, SLOTS};
 use crate::fl;
 
 const WINDOW_WIDTH: f32 = 440.0;
@@ -18,6 +18,29 @@ pub struct Settings {
     config: Config,
     error: Option<String>,
     confirm_reset: bool,
+    /// Installed candidates per default-app slot, in `SLOTS` order. Names
+    /// for the dropdown (with "Automatic" first) and ids side by side.
+    slot_names: Vec<Vec<String>>,
+    slot_ids: Vec<Vec<String>>,
+}
+
+/// The freedesktop category a slot's candidates carry.
+fn slot_category(slot: Slot) -> &'static str {
+    match slot {
+        Slot::Browser => "WebBrowser",
+        Slot::Files => "FileManager",
+        Slot::Terminal => "TerminalEmulator",
+        Slot::TaskManager => "Monitor",
+    }
+}
+
+fn slot_label(slot: Slot) -> &'static str {
+    match slot {
+        Slot::Browser => "rail-browser",
+        Slot::Files => "rail-files",
+        Slot::Terminal => "rail-terminal",
+        Slot::TaskManager => "rail-task-manager",
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +52,9 @@ pub enum Message {
     SetSearch(Search),
     SetIcon(String),
     SetLocked(bool),
+    /// Pick a slot's app by dropdown index: 0 is "Automatic".
+    SetDefaultApp(Slot, usize),
+    ShowSlot(Slot, bool),
     SetTileNames(bool),
     SetListMode(ListMode),
     SetRightSide(RightSide),
@@ -68,11 +94,27 @@ impl Application for Settings {
     }
 
     fn init(core: Core, _flags: ()) -> (Self, Task<Message>) {
+        let apps = crate::apps::load_all();
+        let mut slot_names = Vec::with_capacity(SLOTS.len());
+        let mut slot_ids = Vec::with_capacity(SLOTS.len());
+        for slot in SLOTS {
+            let category = slot_category(slot);
+            let mut names = vec![fl!("default-auto")];
+            let mut ids = Vec::new();
+            for a in apps.iter().filter(|a| a.categories.iter().any(|c| c == category)) {
+                names.push(a.name.clone());
+                ids.push(a.id.clone());
+            }
+            slot_names.push(names);
+            slot_ids.push(ids);
+        }
         let mut settings = Self {
             core,
             config: Config::load(),
             error: None,
             confirm_reset: false,
+            slot_names,
+            slot_ids,
         };
         settings.set_header_title(fl!("settings-title"));
         let title = match settings.core.main_window_id() {
@@ -104,6 +146,16 @@ impl Application for Settings {
             }
             Message::SetLocked(on) => {
                 self.change(|c| c.locked = on);
+            }
+            Message::SetDefaultApp(slot, index) => {
+                let id = (index > 0).then(|| {
+                    let n = SLOTS.iter().position(|&s| s == slot).unwrap_or(0);
+                    self.slot_ids[n].get(index - 1).cloned()
+                }).flatten();
+                self.change(|c| c.system_panel.set_app(slot, id));
+            }
+            Message::ShowSlot(slot, on) => {
+                self.change(|c| c.system_panel.set_shown(slot, on));
             }
             Message::SetTileNames(on) => {
                 self.change(|c| c.show_tile_names = on);
@@ -288,6 +340,37 @@ impl Application for Settings {
             )
             .push(text::caption(fl!("settings-locked-hint")));
 
+        let mut defaults = column::with_capacity(10)
+            .spacing(space / 2)
+            .push(text::title4(fl!("settings-defaults")))
+            .push(text::caption(fl!("settings-defaults-hint")));
+        for (n, slot) in SLOTS.into_iter().enumerate() {
+            let selected = self
+                .config
+                .system_panel
+                .app(slot)
+                .and_then(|id| self.slot_ids[n].iter().position(|c| c == id))
+                .map_or(0, |i| i + 1);
+            defaults = defaults.push(
+                row::with_capacity(3)
+                    .spacing(space)
+                    .align_y(Alignment::Center)
+                    .push(text::body(fl!(slot_label(slot))).width(Length::FillPortion(2)))
+                    .push(
+                        cosmic::widget::dropdown(
+                            &self.slot_names[n],
+                            Some(selected),
+                            move |i| Message::SetDefaultApp(slot, i),
+                        )
+                        .width(Length::FillPortion(3)),
+                    )
+                    .push(
+                        toggler(self.config.system_panel.shown(slot))
+                            .on_toggle(move |on| Message::ShowSlot(slot, on)),
+                    ),
+            );
+        }
+
         let most_used = row::with_capacity(2)
             .align_y(Alignment::Center)
             .push(text::body(fl!("settings-most-used")).width(Length::Fill))
@@ -337,6 +420,8 @@ impl Application for Settings {
             .push(sections)
             .push(divider::horizontal::default())
             .push(icon_pick)
+            .push(divider::horizontal::default())
+            .push(defaults)
             .push(divider::horizontal::default())
             .push(most_used)
             .push(tile_names)

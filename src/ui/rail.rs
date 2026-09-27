@@ -6,6 +6,7 @@ use cosmic::widget::{button, column, container, icon, popover, row, text, toolti
 use cosmic::Element;
 
 use crate::app::{Avatar, Message};
+use crate::config::{Slot, SystemPanel};
 use crate::fl;
 use crate::session::{self, Power};
 use crate::ui::{menu_card, quiet_button, row_radius, RAIL_WIDTH};
@@ -100,7 +101,17 @@ fn avatar<'a>(a: &Avatar) -> Element<'a, Message> {
     .into()
 }
 
-pub fn view<'a>(power_open: bool, account: &Avatar) -> Element<'a, Message> {
+/// The symbolic glyph and label key for a default-app slot.
+pub fn slot_face(slot: Slot) -> (&'static str, &'static str) {
+    match slot {
+        Slot::Browser => ("web-browser-symbolic", "rail-browser"),
+        Slot::Files => ("folder-symbolic", "rail-files"),
+        Slot::Terminal => ("utilities-terminal-symbolic", "rail-terminal"),
+        Slot::TaskManager => ("utilities-system-monitor-symbolic", "rail-task-manager"),
+    }
+}
+
+pub fn view<'a>(power_open: bool, account: &Avatar, panel: &SystemPanel) -> Element<'a, Message> {
     let power = rail_button(
         "system-shutdown-symbolic",
         fl!("power"),
@@ -115,17 +126,21 @@ pub fn view<'a>(power_open: bool, account: &Avatar) -> Element<'a, Message> {
         power = power.popup(power_menu());
     }
 
-    column::with_children(vec![
-        avatar(account),
-        Space::new().height(Length::Fill).into(),
-        rail_button("folder-symbolic", fl!("rail-files"), Message::OpenFiles),
-        rail_button(
-            "preferences-system-symbolic",
-            fl!("rail-settings"),
-            Message::OpenSettingsApp,
-        ),
-        power.into(),
-    ])
+    let mut col = column::with_capacity(8)
+        .push(avatar(account))
+        .push(Space::new().height(Length::Fill));
+    for slot in crate::config::SLOTS {
+        if panel.shown(slot) {
+            let (glyph, key) = slot_face(slot);
+            col = col.push(rail_button(glyph, fl!(key), Message::OpenSlot(slot)));
+        }
+    }
+    col.push(rail_button(
+        "preferences-system-symbolic",
+        fl!("rail-settings"),
+        Message::OpenSettingsApp,
+    ))
+    .push(power)
     .spacing(4)
     .align_x(Alignment::Center)
     .width(Length::Fixed(RAIL_WIDTH))

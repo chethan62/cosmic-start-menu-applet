@@ -8,7 +8,7 @@ use cosmic::widget::{column, container, mouse_area, popover, row, text, text_inp
 use cosmic::{Application, Element};
 
 use crate::apps::App as AppEntry;
-use crate::config::{Config, ListMode, RightSide, TileRef, TileSize};
+use crate::config::{Config, ListMode, RightSide, Slot, TileRef, TileSize};
 use crate::fl;
 use crate::folders::Folder;
 use crate::session::Power;
@@ -319,7 +319,8 @@ pub enum Message {
     AddGroup,
     RenameGroup(usize, String),
     RemoveGroup(usize),
-    OpenFiles,
+    /// One of the rail's default-app shortcuts.
+    OpenSlot(Slot),
     OpenSettingsApp,
     OpenAccount,
 }
@@ -634,6 +635,29 @@ impl App {
 
     fn width(&self) -> f32 {
         popup_width(self.spacing(), self.config.tile_cells())
+    }
+
+    /// An installed app for a rail slot nobody configured: the desktop's
+    /// default browser by xdg-settings, else the first app carrying the
+    /// slot's freedesktop category.
+    fn slot_fallback(&self, slot: Slot) -> Option<String> {
+        if slot == Slot::Browser {
+            if let Some(id) = crate::session::default_browser_id()
+                .filter(|id| self.apps.iter().any(|a| &a.id == id))
+            {
+                return Some(id);
+            }
+        }
+        let category = match slot {
+            Slot::Browser => "WebBrowser",
+            Slot::Files => "FileManager",
+            Slot::Terminal => "TerminalEmulator",
+            Slot::TaskManager => "Monitor",
+        };
+        self.apps
+            .iter()
+            .find(|a| a.categories.iter().any(|c| c == category))
+            .map(|a| a.id.clone())
     }
 }
 
@@ -1111,10 +1135,33 @@ impl Application for App {
                 self.error = Some(e);
                 Task::none()
             }
-            Message::OpenFiles => {
-                let r = crate::session::open_files();
-                self.report(r);
-                self.close_popup()
+            Message::OpenSlot(slot) => {
+                // The configured app when it is still installed; otherwise a
+                // sensible stand-in, so the button always does something.
+                let configured = self
+                    .config
+                    .system_panel
+                    .app(slot)
+                    .filter(|id| self.apps.iter().any(|a| &a.id == id))
+                    .map(str::to_owned);
+                if let Some(id) = configured {
+                    return self.update(Message::LaunchId(id));
+                }
+                if let Some(id) = self.slot_fallback(slot) {
+                    return self.update(Message::LaunchId(id));
+                }
+                match slot {
+                    // The old Files behaviour: home in whatever xdg says.
+                    Slot::Files => {
+                        let r = crate::session::open_files();
+                        self.report(r);
+                        self.close_popup()
+                    }
+                    _ => {
+                        self.error = Some(fl!("no-default-app"));
+                        Task::none()
+                    }
+                }
             }
             Message::OpenSettingsApp => {
                 let r = crate::session::open_settings_page(None);
@@ -1277,7 +1324,10 @@ impl Application for App {
             .spacing(COLUMN_GAP)
             .into()
         };
-        let columns = row::with_children(vec![ui::rail::view(self.power_open, &self.avatar), main])
+        let columns = row::with_children(vec![
+            ui::rail::view(self.power_open, &self.avatar, &self.config.system_panel),
+            main,
+        ])
             .spacing(COLUMN_GAP)
             .height(Length::Fill);
 
