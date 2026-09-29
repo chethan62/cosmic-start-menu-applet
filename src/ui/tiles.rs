@@ -20,12 +20,22 @@ use crate::config::{Config, RightSide, TileFinish, TileRef, TileSize};
 use crate::fl;
 use crate::tile_layout;
 use crate::ui::{
-    colored_tile_class, image_tile_class, menu_card, parse_hex, quiet_button, selected_button,
-    tile_button_class, Spacing,
+    colored_tile_class, header_text, image_tile_class, menu_card, muted_text, parse_hex,
+    quiet_button, selected_button, thin_scroll, tile_button_class, Spacing, SCROLL_GUTTER,
 };
 
-/// One grid cell. Small tiles are one cell, Medium 2×2, Wide 4×2.
-pub const CELL: f32 = 44.0;
+/// One grid cell. Small tiles are one cell, Medium 2×2, Wide 4×2. At the
+/// desktop's usual 12 px gutter a Medium tile lands on 104 px square — the
+/// module the whole right-hand column is built from.
+pub const CELL: f32 = 46.0;
+
+/// How far below a tile's top edge its icon starts.
+const TILE_TOP: u16 = 20;
+/// Inset of a tile's name from the left and bottom edges.
+const TILE_INSET: u16 = 12;
+/// Air above and below a group heading.
+const HEADING_ABOVE: u16 = 24;
+const HEADING_BELOW: u16 = 10;
 
 fn span(cells: u16, gap: f32) -> f32 {
     CELL * f32::from(cells) + gap * f32::from(cells.saturating_sub(1))
@@ -36,9 +46,12 @@ pub fn grid_width(spacing: Spacing, cells: u16) -> f32 {
     span(cells, f32::from(spacing.gap))
 }
 
-/// The whole right-hand column: the grid plus room for the scrollbar.
+/// The whole right-hand column: the grid plus a gutter the scroll thumb
+/// lives in. Reserved here *and* padded inside the scroll view, because an
+/// overlay thumb otherwise draws straight over the rightmost tiles and
+/// makes them read as clipped.
 pub fn column_width(spacing: Spacing, cells: u16) -> f32 {
-    grid_width(spacing, cells) + 12.0
+    grid_width(spacing, cells) + f32::from(SCROLL_GUTTER)
 }
 
 /// The rename input's id, so opening it can focus it.
@@ -89,7 +102,7 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
     } = args;
     let glyph = icon(app.icon.as_cosmic_icon()).size(match size {
         TileSize::Small => 24,
-        TileSize::Medium | TileSize::Wide => 32,
+        TileSize::Medium | TileSize::Wide => 48,
     });
     // Mid-edit the tile is the input, whatever its size.
     if let Some((field, draft)) = renaming {
@@ -112,11 +125,17 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         TileSize::Medium | TileSize::Wide if show_name => column::with_children(vec![
             container(glyph)
                 .center_x(Length::Fill)
-                .center_y(Length::Fill)
+                .padding([TILE_TOP, 0, 0, 0])
                 .into(),
-            text::caption(name)
-                .wrapping(cosmic::iced::widget::text::Wrapping::None)
-                .into(),
+            Space::new().height(Length::Fill).into(),
+            container(
+                text::caption(name)
+                    .font(cosmic::font::semibold())
+                    .wrapping(cosmic::iced::widget::text::Wrapping::None),
+            )
+            .padding([0, TILE_INSET, TILE_INSET, TILE_INSET])
+            .width(Length::Fill)
+            .into(),
         ])
         .align_x(Alignment::Start)
         .into(),
@@ -136,10 +155,7 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
     };
     let button = button::custom(content)
         .class(class)
-        .padding(match size {
-            TileSize::Small => [0, 0],
-            TileSize::Medium | TileSize::Wide => [6, 8],
-        })
+        .padding(0)
         .width(Length::Fixed(w))
         .height(Length::Fixed(h))
         .on_press(if edit.on {
@@ -174,7 +190,9 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
 fn heading<'a>(g: usize, name: &'a str, spacing: Spacing, edit: Edit) -> Element<'a, Message> {
     let pad = [spacing.section, 0, spacing.pad_y, 2];
     if !edit.on {
-        return container(text::heading(name)).padding(pad).into();
+        return container(header_text(name).class(cosmic::theme::Text::Custom(muted_text)))
+            .padding([HEADING_ABOVE, 0, HEADING_BELOW, 2])
+            .into();
     }
     if edit.picked.is_some() {
         return container(
@@ -314,7 +332,9 @@ fn app_grid<'a>(ids: &[String], apps: &'a [App], note: String) -> Element<'a, Me
         col = col.push(r);
     }
     col = col.push(container(text::caption(note)).padding([8, 2]));
-    scrollable(col).height(Length::Fill).into()
+    thin_scroll(scrollable(container(col).padding([0, SCROLL_GUTTER, 8, 0])))
+        .height(Length::Fill)
+        .into()
 }
 
 pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
@@ -424,7 +444,7 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
     }
 
     if config.locked {
-        return column::with_children(vec![scrollable(groups).height(Length::Fill).into()])
+        return column::with_children(vec![tile_scroll(groups)])
             .width(width)
             .into();
     }
@@ -449,8 +469,24 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
             toggle.into(),
         ])
         .into(),
-        scrollable(groups).height(Length::Fill).into(),
+        tile_scroll(groups),
     ])
     .width(width)
+    .into()
+}
+
+/// The tile column's scroll view. The grid is padded right by the gutter
+/// `column_width` reserved, so the overlay thumb rides beside the tiles
+/// instead of over them — the one thing that made the pane read as broken.
+fn tile_scroll<'a>(
+    groups: cosmic::widget::Column<'a, Message, cosmic::Theme>,
+) -> Element<'a, Message> {
+    thin_scroll(scrollable(container(groups).padding([
+        0,
+        SCROLL_GUTTER,
+        8,
+        0,
+    ])))
+    .height(Length::Fill)
     .into()
 }

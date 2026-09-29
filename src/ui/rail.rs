@@ -9,9 +9,12 @@ use crate::app::{Avatar, Message};
 use crate::config::{Slot, SystemPanel};
 use crate::fl;
 use crate::session::{self, Power};
-use crate::ui::{menu_card, quiet_button, row_radius, RAIL_WIDTH};
+use crate::ui::{menu_card, quiet_button, rail_strip, row_radius, RAIL_WIDTH};
 
 const BUTTON: f32 = 40.0;
+/// Vertical rhythm between rail glyphs, and the pad at the strip's ends.
+const RHYTHM: u16 = 8;
+const RAIL_PAD: u16 = 12;
 
 fn rail_button<'a>(icon_name: &'static str, label: String, msg: Message) -> Element<'a, Message> {
     tooltip(
@@ -135,15 +138,25 @@ pub fn view<'a>(power_open: bool, account: &Avatar, panel: &SystemPanel) -> Elem
             col = col.push(rail_button(glyph, fl!(key), Message::OpenSlot(slot)));
         }
     }
-    col.push(rail_button(
-        "preferences-system-symbolic",
-        fl!("rail-settings"),
-        Message::OpenSettingsApp,
-    ))
-    .push(power)
-    .spacing(4)
-    .align_x(Alignment::Center)
-    .width(Length::Fixed(RAIL_WIDTH))
-    .height(Length::Fill)
-    .into()
+    let col = col
+        .push(rail_button(
+            "preferences-system-symbolic",
+            fl!("rail-settings"),
+            Message::OpenSettingsApp,
+        ))
+        // Power is hard-anchored at the foot of the strip.
+        .push(power)
+        .spacing(RHYTHM)
+        .align_x(Alignment::Center)
+        .width(Length::Fill)
+        .height(Length::Fill);
+    // One element, not a stack of floating glyphs: the rail gets its own
+    // full-height strip, faintly tinted over the popup, with the avatar
+    // inside it at the top and power pinned to the bottom.
+    container(col)
+        .padding([RAIL_PAD, 0, RAIL_PAD, 0])
+        .width(Length::Fixed(RAIL_WIDTH))
+        .height(Length::Fill)
+        .class(rail_strip())
+        .into()
 }

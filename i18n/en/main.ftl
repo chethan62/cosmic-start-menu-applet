@@ -1,6 +1,8 @@
 app-name = Start Menu
 search-placeholder = Type to search
 most-used = Most used
+recently-used = Recently used
+no-results-hint = Check the spelling, or try a shorter word.
 no-results = Nothing matches “{ $query }”
 search-apps = Apps
 search-windows = Open windows

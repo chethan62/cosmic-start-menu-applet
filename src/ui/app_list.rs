@@ -17,8 +17,9 @@ use crate::fl;
 use crate::folders::Folder;
 use crate::launcher::{Item, Section};
 use crate::ui::{
-    menu_card, quiet_button, row_radius, selected_button, HEADER_HEIGHT, ICON, LIST_WIDTH,
-    ROW_HEIGHT,
+    header_text, menu_card, muted_text, quiet_button, row_radius, selected_button, thin_scroll,
+    zone_rule, HEADER_BAND, HEADER_HEIGHT, ICON, LIST_WIDTH, ROW_GUTTER, ROW_HEIGHT, SCROLL_GUTTER,
+    ZONE_LABEL_HEIGHT,
 };
 
 /// A fixed-height button lays its content out from the top; this centres it
@@ -45,7 +46,7 @@ pub fn app_row<'a>(app: &'a App, index: usize, selected: bool) -> Element<'a, Me
         } else {
             quiet_button()
         })
-        .padding([0, 10])
+        .padding([0, ROW_GUTTER])
         .width(Length::Fill)
         .height(Length::Fixed(ROW_HEIGHT))
         .on_press(Message::Launch(index));
@@ -54,21 +55,42 @@ pub fn app_row<'a>(app: &'a App, index: usize, selected: bool) -> Element<'a, Me
         .into()
 }
 
+/// A label over a pinned block ("Most used", "Recent"): quieter and
+/// smaller than a letter header, so a semantic group and an alphabet marker
+/// never read the same. 8 px of air above it, 4 below.
 pub fn section_label<'a>(label: String) -> Element<'a, Message> {
-    container(text::caption_heading(label))
-        .padding([0, 10])
-        .height(Length::Fixed(HEADER_HEIGHT))
-        .align_y(Alignment::End)
+    container(text::caption_heading(label).class(cosmic::theme::Text::Custom(muted_text)))
+        .padding([8, ROW_GUTTER, 4, ROW_GUTTER])
+        .height(Length::Fixed(ZONE_LABEL_HEIGHT))
+        .align_y(Alignment::Center)
         .into()
 }
 
-pub fn letter_header<'a>(letter: char) -> Element<'a, Message> {
-    button::custom(centred(text::heading(letter.to_string())))
+/// The band a section or letter header's text sits in: 26 px tall with 16
+/// above and 4 below, which is what makes it read as the start of a group.
+fn header_band<'a>(label: Element<'a, Message>, msg: Message) -> Element<'a, Message> {
+    container(
+        button::custom(
+            container(label)
+                .height(Length::Fill)
+                .align_y(Alignment::Center),
+        )
         .class(quiet_button())
-        .padding([0, 10])
-        .height(Length::Fixed(HEADER_HEIGHT))
-        .on_press(Message::LetterGrid(true))
-        .into()
+        .padding([0, ROW_GUTTER])
+        .width(Length::Fill)
+        .height(Length::Fixed(HEADER_BAND))
+        .on_press(msg),
+    )
+    .padding([16, 0, 4, 0])
+    .height(Length::Fixed(HEADER_HEIGHT))
+    .into()
+}
+
+pub fn letter_header<'a>(letter: char) -> Element<'a, Message> {
+    header_band(
+        header_text(letter.to_string()).into(),
+        Message::LetterGrid(true),
+    )
 }
 
 /// How far down the list `target`'s header sits. Rows and headers have fixed
@@ -124,16 +146,20 @@ pub fn letter_grid<'a>(present: &[char]) -> Element<'a, Message> {
         }
         r.into()
     });
-    scrollable(column::with_children(rows.collect::<Vec<_>>()).spacing(6))
-        .width(Length::Fixed(LIST_WIDTH))
-        .height(Length::Fill)
-        .into()
+    thin_scroll(scrollable(
+        column::with_children(rows.collect::<Vec<_>>()).spacing(6),
+    ))
+    .width(Length::Fixed(LIST_WIDTH))
+    .height(Length::Fill)
+    .into()
 }
 
 /// Everything the middle column needs, borrowed from the app state.
 pub struct ListView<'a> {
     pub apps: &'a [App],
     pub most_used: &'a [String],
+    /// Recently launched, newest first: the second pinned block.
+    pub recent: &'a [String],
     pub show_most_used: bool,
     pub mode: ListMode,
     pub folders: &'a [Folder],
@@ -215,12 +241,7 @@ pub fn list_bar<'a>(mode: ListMode, menu_open: bool, locked: bool) -> Element<'a
 }
 
 fn category_header<'a>(key: &'static str) -> Element<'a, Message> {
-    button::custom(centred(text::heading(fl!(key))))
-        .class(quiet_button())
-        .padding([0, 10])
-        .height(Length::Fixed(HEADER_HEIGHT))
-        .on_press(Message::LetterGrid(true))
-        .into()
+    header_band(header_text(fl!(key)).into(), Message::LetterGrid(true))
 }
 
 /// A folder row: folder glyph on a tinted base, name, count, chevron.
@@ -255,23 +276,67 @@ fn folder_row<'a>(index: usize, folder: &'a Folder, open: bool) -> Element<'a, M
     .align_y(Alignment::Center);
     button::custom(centred(body))
         .class(quiet_button())
-        .padding([0, 10])
+        .padding([0, ROW_GUTTER])
         .width(Length::Fill)
         .height(Length::Fixed(ROW_HEIGHT))
         .on_press(Message::ToggleFolder(index))
         .into()
 }
 
+/// At most six "Most used" rows, as Windows pins.
+pub const MOST_USED_CAP: usize = 6;
+/// And four recent ones under them, so the zone never pushes the alphabet
+/// off the first screen.
+pub const RECENT_CAP: usize = 4;
+
+/// Which apps each pinned block shows, in the order they are drawn. Shared
+/// with `app.rs`, which measures the zone to keep letter jumps exact.
+pub fn pinned(
+    apps: &[App],
+    most_used: &[String],
+    recent: &[String],
+    show_most_used: bool,
+) -> (Vec<usize>, Vec<usize>) {
+    let find = |id: &String| apps.iter().position(|a| &a.id == id);
+    let top: Vec<usize> = if show_most_used {
+        most_used
+            .iter()
+            .filter_map(find)
+            .take(MOST_USED_CAP)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let fresh: Vec<usize> = recent
+        .iter()
+        .filter_map(find)
+        .filter(|i| !top.contains(i))
+        .take(RECENT_CAP)
+        .collect();
+    (top, fresh)
+}
+
 pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
     let list = v.apps;
     let mut col = column::with_capacity(list.len() + 40).spacing(0);
-    if v.show_most_used && !v.most_used.is_empty() {
+    // The pinned zone: the apps he actually opens, above the first letter
+    // or category header in every mode, closed by a rule so it cannot be
+    // mistaken for one more alphabet section.
+    let (top, fresh) = pinned(list, v.most_used, v.recent, v.show_most_used);
+    if !top.is_empty() {
         col = col.push(section_label(fl!("most-used")));
-        for id in v.most_used {
-            if let Some(i) = list.iter().position(|a| &a.id == id) {
-                col = col.push(app_row(&list[i], i, false));
-            }
+        for i in top.iter().copied() {
+            col = col.push(app_row(&list[i], i, false));
         }
+    }
+    if !fresh.is_empty() {
+        col = col.push(section_label(fl!("recently-used")));
+        for i in fresh.iter().copied() {
+            col = col.push(app_row(&list[i], i, false));
+        }
+    }
+    if !top.is_empty() || !fresh.is_empty() {
+        col = col.push(zone_rule());
     }
     let az = |mut col: cosmic::widget::Column<'a, Message, cosmic::Theme>,
               sections: Vec<(char, Vec<usize>)>| {
@@ -317,7 +382,7 @@ pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
     // Last row of the list, under every section: Settings belongs with the
     // apps rather than pinned beneath them.
     col = col.push(settings_row());
-    scrollable(container(col).padding([0, 8, 0, 0]))
+    thin_scroll(scrollable(container(col).padding([0, SCROLL_GUTTER, 8, 0])))
         .id(v.list_id)
         .width(Length::Fixed(LIST_WIDTH))
         .height(Length::Fill)
@@ -337,7 +402,7 @@ pub fn settings_row<'a>() -> Element<'a, Message> {
     .align_y(Alignment::Center);
     button::custom(centred(body))
         .class(quiet_button())
-        .padding([0, 10])
+        .padding([0, ROW_GUTTER])
         .width(Length::Fill)
         .height(Length::Fixed(ROW_HEIGHT))
         .on_press(Message::OpenSettings)
@@ -363,10 +428,12 @@ pub fn category_grid<'a>(present: &[&'static str]) -> Element<'a, Message> {
         }
         r.into()
     });
-    scrollable(column::with_children(rows.collect::<Vec<_>>()).spacing(6))
-        .width(Length::Fixed(LIST_WIDTH))
-        .height(Length::Fill)
-        .into()
+    thin_scroll(scrollable(
+        column::with_children(rows.collect::<Vec<_>>()).spacing(6),
+    ))
+    .width(Length::Fixed(LIST_WIDTH))
+    .height(Length::Fill)
+    .into()
 }
 
 /// One of the launcher's results: icon, name, and its detail underneath.
@@ -398,7 +465,7 @@ fn found_row<'a>(item: &'a Item, selected: bool) -> Element<'a, Message> {
         } else {
             quiet_button()
         })
-        .padding([0, 10])
+        .padding([0, ROW_GUTTER])
         .width(Length::Fill)
         .height(Length::Fixed(height))
         .on_press(Message::LauncherActivate(item.id))
@@ -415,9 +482,27 @@ pub fn results_view<'a>(
     query: &str,
 ) -> Element<'a, Message> {
     if hits.is_empty() && found.is_empty() {
-        return container(text::body(fl!("no-results", query = query.trim())))
-            .padding([12, 10])
-            .into();
+        return container(
+            column::with_children(vec![
+                container(icon::from_name("system-search-symbolic").size(32))
+                    .class(cosmic::theme::Container::Custom(Box::new(|theme| {
+                        cosmic::widget::container::Style {
+                            icon_color: muted_text(theme).color,
+                            ..Default::default()
+                        }
+                    })))
+                    .into(),
+                text::body(fl!("no-results", query = query.trim())).into(),
+                text::caption(fl!("no-results-hint"))
+                    .class(cosmic::theme::Text::Custom(muted_text))
+                    .into(),
+            ])
+            .spacing(8)
+            .align_x(Alignment::Center),
+        )
+        .center_x(Length::Fill)
+        .padding([48, 16])
+        .into();
     }
     let mut rows: Vec<Element<'a, Message>> = Vec::with_capacity(hits.len() + found.len() + 8);
     if !hits.is_empty() && !found.is_empty() {
@@ -441,9 +526,11 @@ pub fn results_view<'a>(
     // running underneath them; a hair of spacing keeps adjacent fills from
     // welding into one block. (No jump-scrolling here, so the spacing does
     // not upset any offset arithmetic.)
-    scrollable(container(column::with_children(rows).spacing(2)).padding([0, 8, 0, 0]))
-        .height(Length::Fill)
-        .into()
+    thin_scroll(scrollable(
+        container(column::with_children(rows).spacing(2)).padding([0, SCROLL_GUTTER, 8, 0]),
+    ))
+    .height(Length::Fill)
+    .into()
 }
 
 #[cfg(test)]

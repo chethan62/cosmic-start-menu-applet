@@ -11,18 +11,169 @@ pub mod context;
 pub mod rail;
 pub mod tiles;
 
-use cosmic::iced::{Background, Border, Color};
+use cosmic::iced::{Background, Border, Color, Length};
 use cosmic::widget::button;
 
 use crate::config::TileFinish;
 
-pub const RAIL_WIDTH: f32 = 44.0;
+pub const RAIL_WIDTH: f32 = 56.0;
 pub const LIST_WIDTH: f32 = 272.0;
 /// App icon size in a list row.
 pub const ICON: u16 = 24;
 /// Fixed so a letter jump can compute exact scroll offsets.
 pub const ROW_HEIGHT: f32 = 36.0;
-pub const HEADER_HEIGHT: f32 = 32.0;
+/// A section or letter header: 16 px of air above a 26 px band and 4 below,
+/// so a header reads as the start of a group rather than one more row.
+pub const HEADER_HEIGHT: f32 = 46.0;
+/// The band the header's own text sits in, inside `HEADER_HEIGHT`.
+pub const HEADER_BAND: f32 = 26.0;
+/// A label in the pinned zone at the top of the list: 8 above, 17, 4 below.
+pub const ZONE_LABEL_HEIGHT: f32 = 29.0;
+/// The rule that closes the pinned zone, with its air above and below.
+pub const ZONE_RULE_HEIGHT: f32 = 17.0;
+/// Left inset of a list row, to the icon.
+pub const ROW_GUTTER: u16 = 16;
+/// Right inset of a scrolling column: clears the overlay scroll thumb and
+/// keeps a label from being sheared off against it.
+pub const SCROLL_GUTTER: u16 = 16;
+/// The overlay scroll thumb: narrow, rounded, no permanent track.
+pub const SCROLLBAR: f32 = 6.0;
+
+/// Every scrolling column in the popup: a 6 px overlay thumb instead of the
+/// 8 px always-on track libcosmic gives by default.
+pub fn thin_scroll<'a, M: 'a>(
+    s: cosmic::iced::widget::Scrollable<'a, M, cosmic::Theme, cosmic::Renderer>,
+) -> cosmic::iced::widget::Scrollable<'a, M, cosmic::Theme, cosmic::Renderer> {
+    s.class(cosmic::theme::iced::Scrollable::Minimal)
+        .scrollbar_width(SCROLLBAR)
+        .scroller_width(SCROLLBAR)
+        .scrollbar_padding(SCROLLBAR / 2.0)
+}
+
+/// A 1 px full-width rule in the theme's divider colour: what closes the
+/// pinned zone so it never reads as one more alphabet section.
+pub fn zone_rule<'a, M: 'a>() -> cosmic::Element<'a, M> {
+    cosmic::widget::container(
+        cosmic::widget::container(cosmic::widget::Space::new().height(Length::Fixed(1.0)))
+            .width(Length::Fill)
+            .height(Length::Fixed(1.0))
+            .class(cosmic::theme::Container::Custom(Box::new(|theme| {
+                let mut edge = theme
+                    .cosmic()
+                    .background(theme.transparent)
+                    .component
+                    .divider;
+                edge.alpha *= 0.85;
+                cosmic::widget::container::Style {
+                    background: Some(Background::Color(Color::from(edge))),
+                    ..Default::default()
+                }
+            }))),
+    )
+    .padding([8, 0, 8, 0])
+    .width(Length::Fill)
+    .into()
+}
+
+/// A muted caption heading: 12 px semibold at 60 % of the foreground, which
+/// is how a semantic group ("Most used") tells itself apart from an index
+/// letter without inventing a colour.
+pub fn muted_text(theme: &cosmic::Theme) -> cosmic::iced::widget::text::Style {
+    let mut c: Color = theme.cosmic().background(theme.transparent).on.into();
+    c.a *= 0.6;
+    cosmic::iced::widget::text::Style {
+        color: Some(c),
+        selected_fill: theme.cosmic().accent.base.into(),
+    }
+}
+
+/// 13 px semibold: the weight a section or letter header carries.
+pub fn header_text<'a>(
+    label: impl Into<std::borrow::Cow<'a, str>> + 'a,
+) -> cosmic::widget::Text<'a, cosmic::Theme, cosmic::Renderer> {
+    cosmic::widget::text(label)
+        .size(13.0)
+        .line_height(cosmic::iced::widget::text::LineHeight::Absolute(
+            18.0.into(),
+        ))
+        .font(cosmic::font::semibold())
+}
+
+/// The rail's own strip: a faint tint over the popup so the column reads as
+/// one element rather than a stack of floating glyphs.
+pub fn rail_strip<'a>() -> cosmic::theme::Container<'a> {
+    cosmic::theme::Container::Custom(Box::new(|theme| {
+        let cosmic = theme.cosmic();
+        let mut tint: Color = cosmic.background(theme.transparent).component.base.into();
+        tint.a *= 0.55;
+        cosmic::widget::container::Style {
+            background: Some(Background::Color(tint)),
+            border: Border {
+                radius: cosmic.corner_radii.radius_s.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }))
+}
+
+/// The search field. libcosmic's own `Search` class paints a fully
+/// saturated 2 px accent ring on focus, which under an orange accent is the
+/// loudest thing on the menu; this keeps the accent but at 55 % alpha, over
+/// a quiet 1 px edge at rest.
+pub fn search_input_class() -> cosmic::theme::TextInput {
+    use cosmic::widget::text_input::Appearance;
+
+    fn base(theme: &cosmic::Theme, border_width: f32, border_color: Color) -> Appearance {
+        let cosmic = theme.cosmic();
+        let layer = cosmic.background(theme.transparent);
+        let mut fill: Color = layer.component.base.into();
+        fill.a *= 0.5;
+        let mut hint: Color = layer.on.into();
+        hint.a *= 0.55;
+        Appearance {
+            background: Background::Color(fill),
+            border_radius: cosmic.corner_radii.radius_s.into(),
+            border_offset: None,
+            border_width,
+            border_color,
+            icon_color: None,
+            text_color: None,
+            placeholder_color: hint,
+            selected_text_color: cosmic.on_accent_color().into(),
+            selected_fill: cosmic.accent_color().into(),
+            label_color: layer.on.into(),
+        }
+    }
+
+    fn quiet(theme: &cosmic::Theme, scale: f32) -> Appearance {
+        let mut edge: Color = theme
+            .cosmic()
+            .background(theme.transparent)
+            .component
+            .divider
+            .into();
+        edge.a *= scale;
+        base(theme, 1.0, edge)
+    }
+
+    fn ring(theme: &cosmic::Theme) -> Appearance {
+        let mut accent: Color = theme.cosmic().accent.base.into();
+        accent.a *= 0.55;
+        base(theme, 2.0, accent)
+    }
+
+    cosmic::theme::TextInput::Custom {
+        active: Box::new(|theme| quiet(theme, 1.0)),
+        error: Box::new(|theme| {
+            let danger = theme.cosmic().destructive_color();
+            base(theme, 2.0, Color::from(danger))
+        }),
+        hovered: Box::new(|theme| quiet(theme, 1.6)),
+        focused: Box::new(ring),
+        disabled: Box::new(|theme| quiet(theme, 0.5)),
+    }
+}
 
 /// The popup's spacing scale, read from the theme. COSMIC ships three
 /// densities with different values for the same token, so these are looked
@@ -70,7 +221,7 @@ fn tile_component(theme: &cosmic::Theme) -> cosmic::cosmic_theme::Component {
 
 /// How much of the card colour a `Frosted` tile keeps: dense enough to read
 /// as a surface, thin enough that the blur behind still shows.
-const FROSTED_TILE_ALPHA: f32 = 0.68;
+const FROSTED_TILE_ALPHA: f32 = 0.88;
 
 /// Fill and edge width for a finish. One place, so a button tile and a
 /// container tile cannot disagree about what "frosted" means.
@@ -81,10 +232,10 @@ fn finish_paint(
 ) -> (Option<Color>, f32) {
     let mut fill = fill;
     match finish {
-        TileFinish::Solid => (Some(Color::from(fill)), 0.0),
+        TileFinish::Solid => (Some(Color::from(fill)), 1.0),
         TileFinish::Frosted => {
             fill.alpha *= FROSTED_TILE_ALPHA;
-            (Some(Color::from(fill)), 0.0)
+            (Some(Color::from(fill)), 1.0)
         }
         TileFinish::Outline => (None, 1.0),
         TileFinish::Accent => (Some(Color::from(theme.cosmic().accent_color())), 0.0),
@@ -100,6 +251,14 @@ pub fn tile_radius(theme: &cosmic::Theme) -> f32 {
 /// Rows, rail buttons and menu items take the small radius.
 pub fn row_radius(theme: &cosmic::Theme) -> f32 {
     theme.cosmic().corner_radii.radius_s[0]
+}
+
+/// The 2 px accent ring a keyboard-focused control wears. Drawn as the
+/// button's outline so it sits *outside* the shape and never eats the fill.
+fn focus_ring(style: &mut button::Style, theme: &cosmic::Theme) {
+    let accent = theme.cosmic().accent.base;
+    style.outline_width = 2.0;
+    style.outline_color = Color::from(accent);
 }
 
 fn tile_border(theme: &cosmic::Theme, width: f32) -> Border {
@@ -227,7 +386,13 @@ pub fn tile_button_class(finish: TileFinish) -> button::ButtonClass {
     }
 
     button::ButtonClass::Custom {
-        active: Box::new(move |_focused, theme| style(theme, finish, tile_component(theme).base)),
+        active: Box::new(move |focused, theme| {
+            let mut s = style(theme, finish, tile_component(theme).base);
+            if focused {
+                focus_ring(&mut s, theme);
+            }
+            s
+        }),
         disabled: Box::new(move |theme| style(theme, finish, tile_component(theme).disabled)),
         hovered: Box::new(move |_focused, theme| {
             style(theme, TileFinish::Solid, tile_component(theme).hover)
@@ -256,7 +421,13 @@ pub fn quiet_button() -> button::ButtonClass {
     }
 
     button::ButtonClass::Custom {
-        active: Box::new(|_focused, theme| base(theme, None)),
+        active: Box::new(|focused, theme| {
+            let mut s = base(theme, None);
+            if focused {
+                focus_ring(&mut s, theme);
+            }
+            s
+        }),
         disabled: Box::new(|theme| base(theme, None)),
         hovered: Box::new(|_focused, theme| base(theme, Some(tile_component(theme).hover))),
         pressed: Box::new(|_focused, theme| base(theme, Some(tile_component(theme).pressed))),

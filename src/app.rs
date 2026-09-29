@@ -554,19 +554,23 @@ impl App {
 
     /// Height of the Most used block at the top of the list, if shown.
     fn most_used_height(&self) -> f32 {
-        if !self.config.show_most_used {
+        let (top, fresh) = ui::app_list::pinned(
+            &self.apps,
+            &self.usage_top,
+            &self.recent,
+            self.config.show_most_used,
+        );
+        if top.is_empty() && fresh.is_empty() {
             return 0.0;
         }
-        let rows = self
-            .usage_top
-            .iter()
-            .filter(|id| self.apps.iter().any(|a| &a.id == *id))
-            .count();
-        if rows == 0 {
-            0.0
-        } else {
-            ui::HEADER_HEIGHT + rows as f32 * ui::ROW_HEIGHT
-        }
+        let block = |rows: usize| {
+            if rows == 0 {
+                0.0
+            } else {
+                ui::ZONE_LABEL_HEIGHT + rows as f32 * ui::ROW_HEIGHT
+            }
+        };
+        block(top.len()) + block(fresh.len()) + ui::ZONE_RULE_HEIGHT
     }
 
     /// Height of the Folders block: its label, one row per folder, and the
@@ -1255,6 +1259,7 @@ impl Application for App {
         let spacing = self.spacing();
         let search = text_input::search_input(fl!("search-placeholder"), &self.query)
             .id(self.search_id.clone())
+            .style(ui::search_input_class())
             .on_input(Message::Query)
             .on_submit(|_| Message::Submit);
 
@@ -1300,6 +1305,7 @@ impl Application for App {
                         ui::app_list::view(ui::app_list::ListView {
                             apps: &self.apps,
                             most_used: &self.usage_top,
+                            recent: &self.recent,
                             show_most_used: self.config.show_most_used,
                             mode: self.config.list_mode,
                             folders: &self.folders,

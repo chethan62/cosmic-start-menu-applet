@@ -74,7 +74,7 @@ pub fn surface(id: Id, width: f32, position: MenuPosition) -> Task<Message> {
 }
 
 /// Gap between the shortcut menu and the screen edge / panel.
-const EDGE: i32 = 4;
+const EDGE: i32 = 8;
 
 /// The menu's card, as `popup_container` paints it, for the shortcut menu:
 /// `popup_container` is an autosize widget that resizes the panel's popup,
@@ -86,6 +86,10 @@ const EDGE: i32 = 4;
 pub fn card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
     let background = cosmic.background(false);
+    // A light hairline rather than the divider grey: it catches the top and
+    // left edges and makes the card sit *in* the desktop, not on it.
+    let mut edge: cosmic::iced::Color = background.divider.into();
+    edge.a *= 0.9;
     cosmic::widget::container::Style {
         text_color: Some(background.on.into()),
         icon_color: Some(background.on.into()),
@@ -93,7 +97,12 @@ pub fn card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
         border: cosmic::iced::Border {
             radius: cosmic.corner_radii.radius_m.into(),
             width: 1.0,
-            color: background.divider.into(),
+            color: edge,
+        },
+        shadow: cosmic::iced::Shadow {
+            color: cosmic::iced::Color::from_rgba(0.0, 0.0, 0.0, 0.30),
+            offset: cosmic::iced::Vector::new(0.0, 12.0),
+            blur_radius: 32.0,
         },
         ..Default::default()
     }
