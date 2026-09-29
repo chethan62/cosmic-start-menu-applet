@@ -251,7 +251,7 @@ impl Default for Config {
             show_most_used: true,
             locked: false,
             show_tile_names: true,
-            list_mode: ListMode::Category,
+            list_mode: ListMode::Az,
             right_side: RightSide::Tiles,
             tile_columns: 3,
             panel_icon: "start-here-symbolic".into(),
@@ -734,7 +734,7 @@ mod tests {
         let c: Config = toml::from_str("").unwrap();
         assert_eq!(
             (c.list_mode, c.right_side),
-            (ListMode::Category, RightSide::Tiles)
+            (ListMode::Az, RightSide::Tiles)
         );
         let c: Config =
             toml::from_str("list_mode = \"folders\"\nright_side = \"recent\"\nfinish = \"accent\"")

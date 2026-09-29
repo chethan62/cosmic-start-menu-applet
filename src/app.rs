@@ -552,25 +552,24 @@ impl App {
         self.found.clear();
     }
 
-    /// Height of the Most used block at the top of the list, if shown.
-    fn most_used_height(&self) -> f32 {
-        let (top, fresh) = ui::app_list::pinned(
+    /// The apps drawn in the pinned block, which the sections below it
+    /// leave out.
+    fn pinned_rows(&self) -> Vec<usize> {
+        ui::app_list::pinned(
             &self.apps,
             &self.usage_top,
             &self.recent,
             self.config.show_most_used,
-        );
-        if top.is_empty() && fresh.is_empty() {
-            return 0.0;
+        )
+    }
+
+    /// Height of the Most used block at the top of the list, if shown.
+    fn most_used_height(&self, pinned: &[usize]) -> f32 {
+        if pinned.is_empty() {
+            0.0
+        } else {
+            ui::ZONE_LABEL_HEIGHT + pinned.len() as f32 * ui::ROW_HEIGHT
         }
-        let block = |rows: usize| {
-            if rows == 0 {
-                0.0
-            } else {
-                ui::ZONE_LABEL_HEIGHT + rows as f32 * ui::ROW_HEIGHT
-            }
-        };
-        block(top.len()) + block(fresh.len()) + ui::ZONE_RULE_HEIGHT
     }
 
     /// Height of the Folders block: its label, one row per folder, and the
@@ -821,12 +820,16 @@ impl Application for App {
             }
             Message::JumpTo(letter) => {
                 self.letter_grid = false;
+                let pinned = self.pinned_rows();
                 let (sections, prefix) = match self.config.list_mode {
                     ListMode::Folders if !self.folders.is_empty() => (
-                        crate::apps::sections_of(&self.apps, &self.loose),
-                        self.most_used_height() + self.folders_height(),
+                        crate::apps::sections_of_excluding(&self.apps, &self.loose, &pinned),
+                        self.most_used_height(&pinned) + self.folders_height(),
                     ),
-                    _ => (crate::apps::sections(&self.apps), self.most_used_height()),
+                    _ => (
+                        crate::apps::sections_excluding(&self.apps, &pinned),
+                        self.most_used_height(&pinned),
+                    ),
                 };
                 self.scroll_list(
                     prefix
@@ -841,9 +844,10 @@ impl Application for App {
             }
             Message::JumpToCategory(key) => {
                 self.letter_grid = false;
-                let y = self.most_used_height()
+                let pinned = self.pinned_rows();
+                let y = self.most_used_height(&pinned)
                     + ui::app_list::offset_of(
-                        &crate::apps::category_sections(&self.apps),
+                        &crate::apps::category_sections_excluding(&self.apps, &pinned),
                         0,
                         &key,
                         ui::ROW_HEIGHT,
@@ -1287,17 +1291,20 @@ impl Application for App {
                         self.config.locked,
                     ),
                     if self.letter_grid && self.config.list_mode == ListMode::Category {
-                        let present: Vec<&'static str> = crate::apps::category_sections(&self.apps)
-                            .into_iter()
-                            .map(|(k, _)| k)
-                            .collect();
+                        let pinned = self.pinned_rows();
+                        let present: Vec<&'static str> =
+                            crate::apps::category_sections_excluding(&self.apps, &pinned)
+                                .into_iter()
+                                .map(|(k, _)| k)
+                                .collect();
                         ui::app_list::category_grid(&present)
                     } else if self.letter_grid {
+                        let pinned = self.pinned_rows();
                         let sections = match self.config.list_mode {
                             ListMode::Folders if !self.folders.is_empty() => {
-                                crate::apps::sections_of(&self.apps, &self.loose)
+                                crate::apps::sections_of_excluding(&self.apps, &self.loose, &pinned)
                             }
-                            _ => crate::apps::sections(&self.apps),
+                            _ => crate::apps::sections_excluding(&self.apps, &pinned),
                         };
                         let present: Vec<char> = sections.into_iter().map(|(c, _)| c).collect();
                         ui::app_list::letter_grid(&present)

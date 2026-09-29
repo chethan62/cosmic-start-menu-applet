@@ -17,27 +17,27 @@ use cosmic::widget::button;
 use crate::config::TileFinish;
 
 pub const RAIL_WIDTH: f32 = 56.0;
-pub const LIST_WIDTH: f32 = 272.0;
+pub const LIST_WIDTH: f32 = 300.0;
 /// App icon size in a list row.
 pub const ICON: u16 = 24;
 /// Fixed so a letter jump can compute exact scroll offsets.
 pub const ROW_HEIGHT: f32 = 36.0;
-/// A section or letter header: 16 px of air above a 26 px band and 4 below,
-/// so a header reads as the start of a group rather than one more row.
-pub const HEADER_HEIGHT: f32 = 46.0;
+/// A letter header: an 8 px gap over a 24 px band with 2 below. Short on
+/// purpose — the alphabet is the column's spine, so a letter has to cost
+/// far less vertical room than the rows it labels.
+pub const HEADER_HEIGHT: f32 = 34.0;
 /// The band the header's own text sits in, inside `HEADER_HEIGHT`.
-pub const HEADER_BAND: f32 = 26.0;
-/// A label in the pinned zone at the top of the list: 8 above, 17, 4 below.
-pub const ZONE_LABEL_HEIGHT: f32 = 29.0;
-/// The rule that closes the pinned zone, with its air above and below.
-pub const ZONE_RULE_HEIGHT: f32 = 17.0;
+pub const HEADER_BAND: f32 = 24.0;
+/// The one label over the pinned block: 6 above, 18, 4 below.
+pub const ZONE_LABEL_HEIGHT: f32 = 28.0;
 /// Left inset of a list row, to the icon.
-pub const ROW_GUTTER: u16 = 16;
-/// Right inset of a scrolling column: clears the overlay scroll thumb and
-/// keeps a label from being sheared off against it.
-pub const SCROLL_GUTTER: u16 = 16;
-/// The overlay scroll thumb: narrow, rounded, no permanent track.
-pub const SCROLLBAR: f32 = 6.0;
+pub const ROW_GUTTER: u16 = 12;
+/// Right inset of a scrolling column: just enough for the overlay thumb to
+/// ride beside the labels rather than over them.
+pub const SCROLL_GUTTER: u16 = 8;
+/// The overlay scroll thumb: a 4 px bar flush with the column's own right
+/// edge, no permanent track.
+pub const SCROLLBAR: f32 = 4.0;
 
 /// Every scrolling column in the popup: a 6 px overlay thumb instead of the
 /// 8 px always-on track libcosmic gives by default.
@@ -47,32 +47,9 @@ pub fn thin_scroll<'a, M: 'a>(
     s.class(cosmic::theme::iced::Scrollable::Minimal)
         .scrollbar_width(SCROLLBAR)
         .scroller_width(SCROLLBAR)
+        // Inset by half its own width: the bar hugs the column edge instead
+        // of floating a gutter's width inside the rows.
         .scrollbar_padding(SCROLLBAR / 2.0)
-}
-
-/// A 1 px full-width rule in the theme's divider colour: what closes the
-/// pinned zone so it never reads as one more alphabet section.
-pub fn zone_rule<'a, M: 'a>() -> cosmic::Element<'a, M> {
-    cosmic::widget::container(
-        cosmic::widget::container(cosmic::widget::Space::new().height(Length::Fixed(1.0)))
-            .width(Length::Fill)
-            .height(Length::Fixed(1.0))
-            .class(cosmic::theme::Container::Custom(Box::new(|theme| {
-                let mut edge = theme
-                    .cosmic()
-                    .background(theme.transparent)
-                    .component
-                    .divider;
-                edge.alpha *= 0.85;
-                cosmic::widget::container::Style {
-                    background: Some(Background::Color(Color::from(edge))),
-                    ..Default::default()
-                }
-            }))),
-    )
-    .padding([8, 0, 8, 0])
-    .width(Length::Fill)
-    .into()
 }
 
 /// A muted caption heading: 12 px semibold at 60 % of the foreground, which
@@ -99,22 +76,25 @@ pub fn header_text<'a>(
         .font(cosmic::font::semibold())
 }
 
-/// The rail's own strip: a faint tint over the popup so the column reads as
-/// one element rather than a stack of floating glyphs.
-pub fn rail_strip<'a>() -> cosmic::theme::Container<'a> {
-    cosmic::theme::Container::Custom(Box::new(|theme| {
-        let cosmic = theme.cosmic();
-        let mut tint: Color = cosmic.background(theme.transparent).component.base.into();
-        tint.a *= 0.55;
-        cosmic::widget::container::Style {
-            background: Some(Background::Color(tint)),
-            border: Border {
-                radius: cosmic.corner_radii.radius_s.into(),
+/// A 1 px vertical hairline in the theme's divider colour: what separates
+/// the rail from the list now that the rail has no surface of its own.
+pub fn v_hairline<'a, M: 'a>() -> cosmic::Element<'a, M> {
+    cosmic::widget::container(cosmic::widget::Space::new().width(Length::Fixed(1.0)))
+        .width(Length::Fixed(1.0))
+        .height(Length::Fill)
+        .class(cosmic::theme::Container::Custom(Box::new(|theme| {
+            let mut edge = theme
+                .cosmic()
+                .background(theme.transparent)
+                .component
+                .divider;
+            edge.alpha *= 0.55;
+            cosmic::widget::container::Style {
+                background: Some(Background::Color(Color::from(edge))),
                 ..Default::default()
-            },
-            ..Default::default()
-        }
-    }))
+            }
+        })))
+        .into()
 }
 
 /// The search field. libcosmic's own `Search` class paints a fully
@@ -159,8 +139,11 @@ pub fn search_input_class() -> cosmic::theme::TextInput {
 
     fn ring(theme: &cosmic::Theme) -> Appearance {
         let mut accent: Color = theme.cosmic().accent.base.into();
-        accent.a *= 0.55;
-        base(theme, 2.0, accent)
+        // A hint of the accent, not a saturated band: under a warm accent
+        // the old 2 px / 55 % ring was the loudest thing on the menu and
+        // pulled the eye away from the list it sits over.
+        accent.a *= 0.38;
+        base(theme, 1.0, accent)
     }
 
     cosmic::theme::TextInput::Custom {
@@ -300,10 +283,20 @@ fn is_light(c: Color) -> bool {
 }
 
 /// A tile filled with the user's own colour: the colour at rest, a touch
-/// lighter under the pointer, and black or white content by its luma.
+/// lighter with a bright inset edge under the pointer, a darker press, and
+/// black or white content by its luma.
 pub fn colored_tile_class(fill: Color) -> button::ButtonClass {
-    fn style(theme: &cosmic::Theme, fill: Color) -> button::Style {
-        let border = tile_border(theme, 0.0);
+    /// The inset edge a hovered or keyboard-focused tile wears. Drawn as
+    /// the border rather than a wash so hover reads on a dark fill and a
+    /// light one alike.
+    const EDGE: Color = Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 0.45,
+    };
+
+    fn style(theme: &cosmic::Theme, fill: Color, edge: Option<Color>) -> button::Style {
         let content = if is_light(fill) {
             Color::BLACK
         } else {
@@ -311,9 +304,9 @@ pub fn colored_tile_class(fill: Color) -> button::ButtonClass {
         };
         button::Style {
             background: Some(Background::Color(fill)),
-            border_radius: border.radius,
-            border_width: border.width,
-            border_color: border.color,
+            border_radius: tile_radius(theme).into(),
+            border_width: if edge.is_some() { 2.0 } else { 0.0 },
+            border_color: edge.unwrap_or(Color::TRANSPARENT),
             text_color: Some(content),
             icon_color: Some(content),
             ..button::Style::new()
@@ -327,12 +320,37 @@ pub fn colored_tile_class(fill: Color) -> button::ButtonClass {
             a: c.a,
         }
     }
+    fn darken(c: Color, by: f32) -> Color {
+        Color {
+            r: c.r * (1.0 - by),
+            g: c.g * (1.0 - by),
+            b: c.b * (1.0 - by),
+            a: c.a,
+        }
+    }
+    // A light fill has no headroom to lighten into, so it darkens instead;
+    // either way the hover is a visible step from rest.
+    fn nudge(c: Color, by: f32) -> Color {
+        if is_light(c) {
+            darken(c, by)
+        } else {
+            lighten(c, by)
+        }
+    }
 
     button::ButtonClass::Custom {
-        active: Box::new(move |_focused, theme| style(theme, fill)),
-        disabled: Box::new(move |theme| style(theme, fill)),
-        hovered: Box::new(move |_focused, theme| style(theme, lighten(fill, 0.12))),
-        pressed: Box::new(move |_focused, theme| style(theme, lighten(fill, 0.2))),
+        active: Box::new(move |focused, theme| {
+            // Keyboard focus keeps the inset edge *and* gains the accent
+            // ring outside the shape, so focus and hover stay apart.
+            let mut s = style(theme, fill, focused.then_some(EDGE));
+            if focused {
+                focus_ring(&mut s, theme);
+            }
+            s
+        }),
+        disabled: Box::new(move |theme| style(theme, fill, None)),
+        hovered: Box::new(move |_focused, theme| style(theme, nudge(fill, 0.08), Some(EDGE))),
+        pressed: Box::new(move |_focused, theme| style(theme, darken(fill, 0.12), Some(EDGE))),
     }
 }
 

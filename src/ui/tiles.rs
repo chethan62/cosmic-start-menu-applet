@@ -20,22 +20,27 @@ use crate::config::{Config, RightSide, TileFinish, TileRef, TileSize};
 use crate::fl;
 use crate::tile_layout;
 use crate::ui::{
-    colored_tile_class, header_text, image_tile_class, menu_card, muted_text, parse_hex,
-    quiet_button, selected_button, thin_scroll, tile_button_class, Spacing, SCROLL_GUTTER,
+    colored_tile_class, header_text, image_tile_class, menu_card, parse_hex, quiet_button,
+    selected_button, thin_scroll, tile_button_class, Spacing, SCROLL_GUTTER,
 };
 
-/// One grid cell. Small tiles are one cell, Medium 2×2, Wide 4×2. At the
-/// desktop's usual 12 px gutter a Medium tile lands on 104 px square — the
-/// module the whole right-hand column is built from.
-pub const CELL: f32 = 46.0;
+/// One grid cell. Small tiles are one cell, Medium 2×2, Wide 4×2. Every
+/// tile is a whole number of these, so no tile is ever sized by its label
+/// and every row in a group shares the same column edges. Trimmed from 46
+/// to 42 so the wider app list does not push the popup past ~770 px.
+pub const CELL: f32 = 42.0;
 
 /// How far below a tile's top edge its icon starts.
-const TILE_TOP: u16 = 20;
+const TILE_TOP: u16 = 16;
 /// Inset of a tile's name from the left and bottom edges.
-const TILE_INSET: u16 = 12;
+const TILE_INSET: u16 = 8;
 /// Air above and below a group heading.
-const HEADING_ABOVE: u16 = 24;
+const HEADING_ABOVE: u16 = 20;
 const HEADING_BELOW: u16 = 10;
+/// Icon sizes: a 1×1 tile carries the icon alone, so it gets a bigger one
+/// than the icon-over-a-name layout a 2×2 uses.
+const ICON_SMALL: u16 = 32;
+const ICON_LARGE: u16 = 48;
 
 fn span(cells: u16, gap: f32) -> f32 {
     CELL * f32::from(cells) + gap * f32::from(cells.saturating_sub(1))
@@ -101,8 +106,8 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         renaming,
     } = args;
     let glyph = icon(app.icon.as_cosmic_icon()).size(match size {
-        TileSize::Small => 24,
-        TileSize::Medium | TileSize::Wide => 48,
+        TileSize::Small => ICON_SMALL,
+        TileSize::Medium | TileSize::Wide => ICON_LARGE,
     });
     // Mid-edit the tile is the input, whatever its size.
     if let Some((field, draft)) = renaming {
@@ -153,6 +158,12 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
     } else {
         tile_button_class(finish)
     };
+    // Clipped to the tile: a square-canvas icon (OpenTTD's diamond, say)
+    // otherwise draws past the fill and makes the grid look ragged.
+    let content = container(content)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .clip(true);
     let button = button::custom(content)
         .class(class)
         .padding(0)
@@ -190,7 +201,9 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
 fn heading<'a>(g: usize, name: &'a str, spacing: Spacing, edit: Edit) -> Element<'a, Message> {
     let pad = [spacing.section, 0, spacing.pad_y, 2];
     if !edit.on {
-        return container(header_text(name).class(cosmic::theme::Text::Custom(muted_text)))
+        // Full opacity, unlike a letter header: a group name is a title the
+        // tiles under it belong to, not an index marker.
+        return container(header_text(name))
             .padding([HEADING_ABOVE, 0, HEADING_BELOW, 2])
             .into();
     }
@@ -332,9 +345,14 @@ fn app_grid<'a>(ids: &[String], apps: &'a [App], note: String) -> Element<'a, Me
         col = col.push(r);
     }
     col = col.push(container(text::caption(note)).padding([8, 2]));
-    thin_scroll(scrollable(container(col).padding([0, SCROLL_GUTTER, 8, 0])))
-        .height(Length::Fill)
-        .into()
+    thin_scroll(scrollable(container(col).padding([
+        0,
+        SCROLL_GUTTER,
+        12,
+        0,
+    ])))
+    .height(Length::Fill)
+    .into()
 }
 
 pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
@@ -481,10 +499,12 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
 fn tile_scroll<'a>(
     groups: cosmic::widget::Column<'a, Message, cosmic::Theme>,
 ) -> Element<'a, Message> {
+    // 12 px of bottom padding so the last heading or tile row never clips
+    // against the popup's bottom edge.
     thin_scroll(scrollable(container(groups).padding([
         0,
         SCROLL_GUTTER,
-        8,
+        12,
         0,
     ])))
     .height(Length::Fill)

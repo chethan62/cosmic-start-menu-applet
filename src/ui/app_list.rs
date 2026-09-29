@@ -18,7 +18,7 @@ use crate::folders::Folder;
 use crate::launcher::{Item, Section};
 use crate::ui::{
     header_text, menu_card, muted_text, quiet_button, row_radius, selected_button, thin_scroll,
-    zone_rule, HEADER_BAND, HEADER_HEIGHT, ICON, LIST_WIDTH, ROW_GUTTER, ROW_HEIGHT, SCROLL_GUTTER,
+    HEADER_BAND, HEADER_HEIGHT, ICON, LIST_WIDTH, ROW_GUTTER, ROW_HEIGHT, SCROLL_GUTTER,
     ZONE_LABEL_HEIGHT,
 };
 
@@ -31,9 +31,19 @@ fn centred<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message>
         .into()
 }
 
+/// The icon column: a fixed `ICON`-square box every row's glyph is drawn
+/// into, so a 16 px source and a 512 px one take exactly the same width and
+/// every label in the column starts on the same x.
+fn icon_box<'a>(glyph: Element<'a, Message>) -> Element<'a, Message> {
+    container(glyph)
+        .center(Length::Fixed(f32::from(ICON)))
+        .clip(true)
+        .into()
+}
+
 pub fn app_row<'a>(app: &'a App, index: usize, selected: bool) -> Element<'a, Message> {
     let body = row::with_children(vec![
-        icon(app.icon.as_cosmic_icon()).size(ICON).into(),
+        icon_box(icon(app.icon.as_cosmic_icon()).size(ICON).into()),
         text::body(&app.name)
             .wrapping(cosmic::iced::widget::text::Wrapping::None)
             .into(),
@@ -59,8 +69,8 @@ pub fn app_row<'a>(app: &'a App, index: usize, selected: bool) -> Element<'a, Me
 /// smaller than a letter header, so a semantic group and an alphabet marker
 /// never read the same. 8 px of air above it, 4 below.
 pub fn section_label<'a>(label: String) -> Element<'a, Message> {
-    container(text::caption_heading(label).class(cosmic::theme::Text::Custom(muted_text)))
-        .padding([8, ROW_GUTTER, 4, ROW_GUTTER])
+    container(header_text(label).class(cosmic::theme::Text::Custom(muted_text)))
+        .padding([6, ROW_GUTTER, 4, ROW_GUTTER])
         .height(Length::Fixed(ZONE_LABEL_HEIGHT))
         .align_y(Alignment::Center)
         .into()
@@ -81,14 +91,19 @@ fn header_band<'a>(label: Element<'a, Message>, msg: Message) -> Element<'a, Mes
         .height(Length::Fixed(HEADER_BAND))
         .on_press(msg),
     )
-    .padding([16, 0, 4, 0])
+    .padding([8, 0, 2, 0])
     .height(Length::Fixed(HEADER_HEIGHT))
     .into()
 }
 
+/// A letter header: the uppercase letter at 13 px semibold and 60 % of the
+/// foreground, in the same left gutter as the icon column, so the alphabet
+/// marks the column without competing with the app names.
 pub fn letter_header<'a>(letter: char) -> Element<'a, Message> {
     header_band(
-        header_text(letter.to_string()).into(),
+        header_text(letter.to_uppercase().to_string())
+            .class(cosmic::theme::Text::Custom(muted_text))
+            .into(),
         Message::LetterGrid(true),
     )
 }
@@ -241,12 +256,17 @@ pub fn list_bar<'a>(mode: ListMode, menu_open: bool, locked: bool) -> Element<'a
 }
 
 fn category_header<'a>(key: &'static str) -> Element<'a, Message> {
-    header_band(header_text(fl!(key)).into(), Message::LetterGrid(true))
+    header_band(
+        header_text(fl!(key))
+            .class(cosmic::theme::Text::Custom(muted_text))
+            .into(),
+        Message::LetterGrid(true),
+    )
 }
 
 /// A folder row: folder glyph on a tinted base, name, count, chevron.
 fn folder_row<'a>(index: usize, folder: &'a Folder, open: bool) -> Element<'a, Message> {
-    let base = container(icon::from_name("folder-symbolic").size(16))
+    let base = container(icon::from_name("folder-symbolic").size(14))
         .center(Length::Fixed(f32::from(ICON)))
         .class(cosmic::theme::Container::Custom(Box::new(|theme| {
             let mut tint = theme.cosmic().accent_color();
@@ -283,37 +303,39 @@ fn folder_row<'a>(index: usize, folder: &'a Folder, open: bool) -> Element<'a, M
         .into()
 }
 
-/// At most six "Most used" rows, as Windows pins.
-pub const MOST_USED_CAP: usize = 6;
-/// And four recent ones under them, so the zone never pushes the alphabet
-/// off the first screen.
-pub const RECENT_CAP: usize = 4;
+/// One pinned block of at most five rows. Two stacked blocks pushed the
+/// first letter header nearly 500 px down the column, which is most of the
+/// visible list: the alphabet has to start on the first screen.
+pub const MOST_USED_CAP: usize = 5;
 
-/// Which apps each pinned block shows, in the order they are drawn. Shared
-/// with `app.rs`, which measures the zone to keep letter jumps exact.
+/// The apps the pinned block shows, in the order they are drawn: what he
+/// opens most, topped up with what he opened last when there are not five
+/// of them yet. Shared with `app.rs`, which measures the block to keep
+/// letter jumps exact.
 pub fn pinned(
     apps: &[App],
     most_used: &[String],
     recent: &[String],
     show_most_used: bool,
-) -> (Vec<usize>, Vec<usize>) {
+) -> Vec<usize> {
+    if !show_most_used {
+        return Vec::new();
+    }
     let find = |id: &String| apps.iter().position(|a| &a.id == id);
-    let top: Vec<usize> = if show_most_used {
-        most_used
-            .iter()
-            .filter_map(find)
-            .take(MOST_USED_CAP)
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let fresh: Vec<usize> = recent
+    let mut top: Vec<usize> = most_used
         .iter()
         .filter_map(find)
-        .filter(|i| !top.contains(i))
-        .take(RECENT_CAP)
+        .take(MOST_USED_CAP)
         .collect();
-    (top, fresh)
+    for i in recent.iter().filter_map(find) {
+        if top.len() >= MOST_USED_CAP {
+            break;
+        }
+        if !top.contains(&i) {
+            top.push(i);
+        }
+    }
+    top
 }
 
 pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
@@ -322,21 +344,12 @@ pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
     // The pinned zone: the apps he actually opens, above the first letter
     // or category header in every mode, closed by a rule so it cannot be
     // mistaken for one more alphabet section.
-    let (top, fresh) = pinned(list, v.most_used, v.recent, v.show_most_used);
+    let top = pinned(list, v.most_used, v.recent, v.show_most_used);
     if !top.is_empty() {
         col = col.push(section_label(fl!("most-used")));
         for i in top.iter().copied() {
             col = col.push(app_row(&list[i], i, false));
         }
-    }
-    if !fresh.is_empty() {
-        col = col.push(section_label(fl!("recently-used")));
-        for i in fresh.iter().copied() {
-            col = col.push(app_row(&list[i], i, false));
-        }
-    }
-    if !top.is_empty() || !fresh.is_empty() {
-        col = col.push(zone_rule());
     }
     let az = |mut col: cosmic::widget::Column<'a, Message, cosmic::Theme>,
               sections: Vec<(char, Vec<usize>)>| {
@@ -348,10 +361,12 @@ pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
         }
         col
     };
+    // Every section is drawn without the apps the pinned block already
+    // shows, so no app appears twice on the same screen.
     col = match v.mode {
-        ListMode::Az => az(col, apps::sections(list)),
+        ListMode::Az => az(col, apps::sections_excluding(list, &top)),
         ListMode::Category => {
-            for (key, idxs) in apps::category_sections(list) {
+            for (key, idxs) in apps::category_sections_excluding(list, &top) {
                 col = col.push(category_header(key));
                 for i in idxs {
                     col = col.push(app_row(&list[i], i, false));
@@ -361,7 +376,7 @@ pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
         }
         // No folders found (no App Library file, or an unreadable one) means
         // the plain A–Z list rather than an empty section.
-        ListMode::Folders if v.folders.is_empty() => az(col, apps::sections(list)),
+        ListMode::Folders if v.folders.is_empty() => az(col, apps::sections_excluding(list, &top)),
         ListMode::Folders => {
             col = col.push(section_label(fl!("folders")));
             for (fi, folder) in v.folders.iter().enumerate() {
@@ -376,24 +391,29 @@ pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
                     col = col.push(container(column::with_children(inner)).padding([0, 0, 0, 16]));
                 }
             }
-            az(col, apps::sections_of(list, v.loose))
+            az(col, apps::sections_of_excluding(list, v.loose, &top))
         }
     };
     // Last row of the list, under every section: Settings belongs with the
     // apps rather than pinned beneath them.
     col = col.push(settings_row());
-    thin_scroll(scrollable(container(col).padding([0, SCROLL_GUTTER, 8, 0])))
-        .id(v.list_id)
-        .width(Length::Fixed(LIST_WIDTH))
-        .height(Length::Fill)
-        .into()
+    thin_scroll(scrollable(container(col).padding([
+        0,
+        SCROLL_GUTTER,
+        12,
+        0,
+    ])))
+    .id(v.list_id)
+    .width(Length::Fixed(LIST_WIDTH))
+    .height(Length::Fill)
+    .into()
 }
 
 /// The "Start Menu Settings" entry: the last row of the app list, drawn like
 /// any installed app so it reads as one more item rather than a fixture.
 pub fn settings_row<'a>() -> Element<'a, Message> {
     let body = row::with_children(vec![
-        icon::from_name("preferences-system").size(ICON).into(),
+        icon_box(icon::from_name("preferences-system").size(ICON).into()),
         text::body(fl!("menu-settings"))
             .wrapping(cosmic::iced::widget::text::Wrapping::None)
             .into(),
@@ -439,7 +459,7 @@ pub fn category_grid<'a>(present: &[&'static str]) -> Element<'a, Message> {
 /// One of the launcher's results: icon, name, and its detail underneath.
 fn found_row<'a>(item: &'a Item, selected: bool) -> Element<'a, Message> {
     let glyph: Element<'a, Message> = match &item.icon {
-        Some(name) => icon::from_name(name.as_str()).size(ICON).into(),
+        Some(name) => icon_box(icon::from_name(name.as_str()).size(ICON).into()),
         None => Space::new().width(ICON).into(),
     };
     let mut words = column::with_capacity(2)
@@ -527,7 +547,7 @@ pub fn results_view<'a>(
     // welding into one block. (No jump-scrolling here, so the spacing does
     // not upset any offset arithmetic.)
     thin_scroll(scrollable(
-        container(column::with_children(rows).spacing(2)).padding([0, SCROLL_GUTTER, 8, 0]),
+        container(column::with_children(rows).spacing(2)).padding([0, SCROLL_GUTTER, 12, 0]),
     ))
     .height(Length::Fill)
     .into()
@@ -536,6 +556,41 @@ pub fn results_view<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app(id: &str, name: &str) -> App {
+        App {
+            id: id.into(),
+            name: name.into(),
+            ..App::default()
+        }
+    }
+
+    #[test]
+    fn the_pinned_block_is_one_capped_deduped_list() {
+        let apps: Vec<App> = (0..8)
+            .map(|n| app(&format!("a{n}"), &format!("App {n}")))
+            .collect();
+        let most: Vec<String> = ["a0", "a1", "a2"].iter().map(|s| s.to_string()).collect();
+        // Recent tops the block up to the cap and never repeats a most-used.
+        let recent: Vec<String> = ["a1", "a5", "a6", "a7"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let top = pinned(&apps, &most, &recent, true);
+        assert_eq!(top, vec![0, 1, 2, 5, 6]);
+        assert_eq!(top.len(), MOST_USED_CAP);
+        assert!(pinned(&apps, &most, &recent, false).is_empty());
+    }
+
+    #[test]
+    fn sections_leave_out_whatever_the_pinned_block_shows() {
+        let apps = vec![app("a", "Alpha"), app("b", "Beta"), app("c", "Alfa")];
+        let pinned = vec![0usize];
+        let out = crate::apps::sections_excluding(&apps, &pinned);
+        let flat: Vec<usize> = out.iter().flat_map(|(_, v)| v.clone()).collect();
+        assert_eq!(flat, vec![2, 1]);
+        assert!(!flat.contains(&0));
+    }
 
     #[test]
     fn offset_counts_headers_and_rows_before_the_letter() {

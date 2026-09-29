@@ -9,12 +9,16 @@ use crate::app::{Avatar, Message};
 use crate::config::{Slot, SystemPanel};
 use crate::fl;
 use crate::session::{self, Power};
-use crate::ui::{menu_card, quiet_button, rail_strip, row_radius, RAIL_WIDTH};
+use crate::ui::{menu_card, quiet_button, row_radius, v_hairline, RAIL_WIDTH};
 
 const BUTTON: f32 = 40.0;
-/// Vertical rhythm between rail glyphs, and the pad at the strip's ends.
+/// Vertical rhythm between rail glyphs, and the pad at the rail's ends.
 const RHYTHM: u16 = 8;
 const RAIL_PAD: u16 = 12;
+/// Air between the avatar and the icon cluster under it. The rail used to
+/// push them apart with all the slack in the column, which left the avatar
+/// marooned at the top of an empty strip.
+const AVATAR_GAP: f32 = 16.0;
 
 fn rail_button<'a>(icon_name: &'static str, label: String, msg: Message) -> Element<'a, Message> {
     tooltip(
@@ -53,7 +57,7 @@ fn power_menu<'a>() -> Element<'a, Message> {
         .into()
 }
 
-const AVATAR: f32 = 28.0;
+const AVATAR: f32 = 32.0;
 
 /// Round gives a circle; Slightly round and Square give the small radius
 /// (8 px and 2 px), so the picture matches every other corner on screen.
@@ -91,12 +95,14 @@ fn avatar<'a>(a: &Avatar) -> Element<'a, Message> {
                 ..Default::default()
             }
         })));
+    // The picture *is* the control: no rounded plate behind it, which read
+    // as a stuck selected state at the top of the rail.
     tooltip(
-        button::custom(container(face).center(Length::Fill))
+        button::custom(face)
             .class(quiet_button())
             .padding(0)
-            .width(Length::Fixed(BUTTON))
-            .height(Length::Fixed(BUTTON))
+            .width(Length::Fixed(AVATAR))
+            .height(Length::Fixed(AVATAR))
             .on_press(Message::OpenAccount),
         text::body(fl!("rail-account")),
         tooltip::Position::Right,
@@ -129,9 +135,11 @@ pub fn view<'a>(power_open: bool, account: &Avatar, panel: &SystemPanel) -> Elem
         power = power.popup(power_menu());
     }
 
+    // Avatar, then the default-app cluster right under it, then all the
+    // slack, then Settings and Power as one bottom cluster.
     let mut col = column::with_capacity(8)
         .push(avatar(account))
-        .push(Space::new().height(Length::Fill));
+        .push(Space::new().height(Length::Fixed(AVATAR_GAP - f32::from(RHYTHM))));
     for slot in crate::config::SLOTS {
         if panel.shown(slot) {
             let (glyph, key) = slot_face(slot);
@@ -139,24 +147,28 @@ pub fn view<'a>(power_open: bool, account: &Avatar, panel: &SystemPanel) -> Elem
         }
     }
     let col = col
+        .push(Space::new().height(Length::Fill))
         .push(rail_button(
             "preferences-system-symbolic",
             fl!("rail-settings"),
             Message::OpenSettingsApp,
         ))
-        // Power is hard-anchored at the foot of the strip.
+        // Power is hard-anchored at the foot of the rail.
         .push(power)
         .spacing(RHYTHM)
         .align_x(Alignment::Center)
         .width(Length::Fill)
         .height(Length::Fill);
-    // One element, not a stack of floating glyphs: the rail gets its own
-    // full-height strip, faintly tinted over the popup, with the avatar
-    // inside it at the top and power pinned to the bottom.
-    container(col)
-        .padding([RAIL_PAD, 0, RAIL_PAD, 0])
-        .width(Length::Fixed(RAIL_WIDTH))
-        .height(Length::Fill)
-        .class(rail_strip())
-        .into()
+    // The rail is part of the popup's frame: no surface of its own, no
+    // corner radius of its own, separated from the list by one hairline.
+    row::with_children(vec![
+        container(col)
+            .padding([RAIL_PAD, 0, RAIL_PAD, 0])
+            .width(Length::Fixed(RAIL_WIDTH))
+            .height(Length::Fill)
+            .into(),
+        v_hairline(),
+    ])
+    .height(Length::Fill)
+    .into()
 }

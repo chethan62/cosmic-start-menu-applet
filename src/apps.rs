@@ -181,19 +181,6 @@ pub fn category_of(app: &App) -> &'static str {
         .map_or("cat-other", |(_, v)| v)
 }
 
-/// Apps (already A–Z) grouped by category, in `CATEGORY_ORDER`.
-pub fn category_sections(apps: &[App]) -> Vec<(&'static str, Vec<usize>)> {
-    CATEGORY_ORDER
-        .iter()
-        .filter_map(|&key| {
-            let idx: Vec<usize> = (0..apps.len())
-                .filter(|&i| category_of(&apps[i]) == key)
-                .collect();
-            (!idx.is_empty()).then_some((key, idx))
-        })
-        .collect()
-}
-
 /// The A–Z header an app sorts under. Digits, symbols and blank names share
 /// `#`, which Windows puts first; any other script keeps its own capital.
 pub fn letter(name: &str) -> char {
@@ -203,13 +190,46 @@ pub fn letter(name: &str) -> char {
     }
 }
 
-/// Group `apps` (already sorted) under their letters, `#` first.
-pub fn sections(apps: &[App]) -> Vec<(char, Vec<usize>)> {
-    let all: Vec<usize> = (0..apps.len()).collect();
-    sections_of(apps, &all)
+/// Group `apps` (already sorted) under their letters, `#` first, without
+/// the apps the pinned block at the top of the list already shows — so
+/// nothing appears twice on the same screen.
+pub fn sections_excluding(apps: &[App], skip: &[usize]) -> Vec<(char, Vec<usize>)> {
+    let kept: Vec<usize> = (0..apps.len()).filter(|i| !skip.contains(i)).collect();
+    sections_of(apps, &kept)
 }
 
-/// Like [`sections`], over only the apps at `indices` — the Folders view's
+/// Like [`sections_of`], minus the pinned apps.
+pub fn sections_of_excluding(
+    apps: &[App],
+    indices: &[usize],
+    skip: &[usize],
+) -> Vec<(char, Vec<usize>)> {
+    let kept: Vec<usize> = indices
+        .iter()
+        .copied()
+        .filter(|i| !skip.contains(i))
+        .collect();
+    sections_of(apps, &kept)
+}
+
+/// Apps grouped by category, in `CATEGORY_ORDER`, minus the pinned apps
+/// for the same reason.
+pub fn category_sections_excluding(
+    apps: &[App],
+    skip: &[usize],
+) -> Vec<(&'static str, Vec<usize>)> {
+    CATEGORY_ORDER
+        .iter()
+        .filter_map(|&key| {
+            let idx: Vec<usize> = (0..apps.len())
+                .filter(|&i| !skip.contains(&i) && category_of(&apps[i]) == key)
+                .collect();
+            (!idx.is_empty()).then_some((key, idx))
+        })
+        .collect()
+}
+
+/// Like [`sections_excluding`], over only the apps at `indices` — the Folders view's
 /// apps that are in no folder.
 pub fn sections_of(apps: &[App], indices: &[usize]) -> Vec<(char, Vec<usize>)> {
     let mut out: Vec<(char, Vec<usize>)> = Vec::new();
@@ -339,7 +359,7 @@ mod tests {
             mk("audacity"),
             mk("Bitwarden"),
         ];
-        let s = sections(&apps);
+        let s = sections_excluding(&apps, &[]);
         let letters: Vec<char> = s.iter().map(|(c, _)| *c).collect();
         assert_eq!(letters, ['#', 'A', 'B']);
         assert_eq!(s[1].1, [1, 2]);
