@@ -107,3 +107,18 @@ pub fn card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
         ..Default::default()
     }
 }
+
+/// Give the keyboard back to the compositor once the menu has it.
+///
+/// The surface maps with `Exclusive` because asking on demand left focus on
+/// whatever was underneath. Exclusive also means the compositor never takes
+/// the keyboard away again, so clicking another window raised no `Unfocused`
+/// and the menu could only be closed from the keyboard or the shortcut.
+/// Switching to `OnDemand` after the first focus keeps the menu typable and
+/// lets a click elsewhere close it.
+pub fn release_keyboard(id: Id) -> Task<Message> {
+    use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+        set_keyboard_interactivity, KeyboardInteractivity,
+    };
+    set_keyboard_interactivity(id, KeyboardInteractivity::OnDemand)
+}

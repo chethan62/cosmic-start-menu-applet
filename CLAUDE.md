@@ -15,6 +15,7 @@ COSMIC panel applet giving a Windows 10-style Start menu (A-Z app list, pinned t
 ## Status
 - 2026-09-23: created with standard structure.
 - 2026-09-26: v0.1 built and in the panel. Super is bound to `--toggle` (COSMIC custom shortcut); tiles 2 or 3 across in Settings.
+- 2026-09-30: one menu, one door. The panel button no longer draws its own popup — both it and the Super shortcut go through `--toggle`, so a single layer-surface process is the only menu. It closes when the keyboard leaves it (a layer surface reports that as a Wayland event, not a window one), and a guard stops the click that closed it reopening it.
 - 2026-09-27: design-review round: avatar decodes (WebP sniffed), frost blur clipped to popup corners, search-highlight spacing, Settings entry pinned under the app list (right-click removed), lock mode, tile colour/picture/name-toggle, default-app rail shortcuts picked in Settings.
 - 2026-09-29: blind-critic round 2 vs real Windows 10 shots: one "Most used" block (5 rows, de-duplicated against the letter sections), shorter/muted letter headers, A-Z as the default sort, fixed 24px icon column, coloured-tile hover/press/focus states, 4px scroll bars flush to their column, and the rail rebuilt as part of the frame (no tinted strip, no chip behind the avatar, bottom-pinned Settings/Power).
 

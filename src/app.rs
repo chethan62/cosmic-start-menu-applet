@@ -73,40 +73,22 @@ fn pick(apps: usize, found: usize, selected: usize) -> Option<Pick> {
     })
 }
 
-/// How long the shortcut menu waits after losing the keyboard before closing.
+/// How long the menu waits after losing the keyboard before closing.
 const FOCUS_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
 
-/// The blur region behind the frosted popup, shaped to stay inside its
-/// rounded corners. The compositor blurs rectangles as given — a single
-/// whole-surface rectangle put square blurred corners behind the frame's
-/// rounded ones, poking out at the popup's bottom. A cross of three
-/// rectangles leaves the four `radius`×`radius` corner squares unblurred;
-/// what remains of those squares inside the arc is a few pixels under an
-/// already-translucent film.
-fn blur_region(width: f32, height: f32, radius: f32) -> Vec<cosmic::iced::Rectangle> {
-    let r = radius.clamp(0.0, width.min(height) / 2.0);
-    vec![
-        // The middle band, full height.
-        cosmic::iced::Rectangle {
-            x: r,
-            y: 0.0,
-            width: (width - 2.0 * r).max(0.0),
-            height,
-        },
-        // The side bands, inset past the corner arcs.
-        cosmic::iced::Rectangle {
-            x: 0.0,
-            y: r,
-            width: r,
-            height: (height - 2.0 * r).max(0.0),
-        },
-        cosmic::iced::Rectangle {
-            x: width - r,
-            y: r,
-            width: r,
-            height: (height - 2.0 * r).max(0.0),
-        },
-    ]
+/// How long after closing itself for losing the keyboard the menu ignores a
+/// toggle.
+///
+/// Pressing the panel button while the menu is up does two things in order:
+/// the press moves the keyboard to the panel, which closes the menu, and then
+/// the button asks for a toggle. Without this guard that second half would
+/// reopen the menu the same click had just dismissed.
+const REOPEN_GUARD: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// Whether a toggle arriving now is the tail of the click that just closed
+/// the menu.
+fn is_the_closing_click(closed: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    closed.is_some_and(|at| now.duration_since(at) < REOPEN_GUARD)
 }
 
 pub struct App {
@@ -123,6 +105,9 @@ pub struct App {
     /// focus came back (a `Focused` in between) since it was scheduled.
     focus_losses: u64,
     popup: Option<Id>,
+    /// When the menu last closed itself for losing the keyboard, so the click
+    /// that did it cannot reopen it. See [`REOPEN_GUARD`].
+    closed_by_focus: Option<std::time::Instant>,
     config: Config,
     apps: Vec<AppEntry>,
     usage_top: Vec<String>,
@@ -421,6 +406,7 @@ impl App {
     /// Show the menu: a popup off the panel button, or in shortcut mode a
     /// layer surface the compositor gives the keyboard to.
     fn open(&mut self) -> Task<Message> {
+        self.closed_by_focus = None;
         self.power_open = false;
         self.error = None;
         self.query.clear();
@@ -433,20 +419,12 @@ impl App {
         let id = window::Id::unique();
         self.popup = Some(id);
         self.opened = self.opened.wrapping_add(1);
-        let popup = match self.mode {
-            Mode::Panel => {
-                let mut settings = self.core.applet.get_popup_settings(
-                    self.core.main_window_id().unwrap_or(id),
-                    id,
-                    None,
-                    None,
-                    None,
-                );
-                settings.positioner.size_limits = popup_limits(self.width());
-                cosmic::iced::platform_specific::shell::commands::popup::get_popup(settings)
-            }
-            Mode::Shortcut => crate::shortcut::surface(id, self.width(), self.config.menu_position),
-        };
+        // One surface kind for both ways in. As a panel popup the menu could
+        // not be closed by clicking the button again without a race, could
+        // not take the keyboard unless a click handed it over, and a second
+        // menu could open beside it from the shortcut. A layer surface is
+        // focusable, dismissable and the only menu there is.
+        let popup = crate::shortcut::surface(id, self.width(), self.config.menu_position);
 
         // Re-read apps, history and config on every open, off-thread:
         // an app installed a minute ago shows up, and edits made in the
@@ -466,30 +444,7 @@ impl App {
         // Focused straight away so typing searches, as in Windows.
         let focus = text_input::focus(self.search_id.clone());
 
-        // libcosmic only blurs surfaces it tracks in `surface_views`,
-        // and a popup made with `get_popup` is not one of them, so the
-        // theme's frosted styling would give a translucent popup with
-        // nothing blurred behind it. Ask for the blur ourselves, and
-        // through the Wayland command rather than `window::enable_blur`:
-        // the popup's surface does not exist yet in this batch, and
-        // only the Wayland path parks the request until it does.
-        // (Same fix as cosmic-control-center-applet.)
-        // The shortcut menu's card is opaque instead: see `shortcut::card_style`.
-        //
-        // The region is shaped to the frame's corners: the popup is exactly
-        // `width()` × `POPUP_HEIGHT`, and `popup_container` rounds its card
-        // by the theme's medium radius, so a whole-surface rectangle showed
-        // square blurred corners outside the arcs.
-        if self.mode == Mode::Panel && self.core.frosted(self.core.system_theme().cosmic()) {
-            let radius = self.core.system_theme().cosmic().corner_radii.radius_m[0];
-            let blur = cosmic::iced::platform_specific::shell::commands::blur::blur(
-                id,
-                Some(blur_region(self.width(), POPUP_HEIGHT, radius)),
-            );
-            Task::batch([popup, blur.discard(), load, focus])
-        } else {
-            Task::batch([popup, load, focus])
-        }
+        Task::batch([popup, load, focus])
     }
 
     fn close_popup(&mut self) -> Task<Message> {
@@ -497,19 +452,21 @@ impl App {
         let Some(id) = self.popup.take() else {
             return Task::none();
         };
+        let destroy =
+            cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface(
+                id,
+            );
         match self.mode {
-            Mode::Panel => {
-                cosmic::iced::platform_specific::shell::commands::popup::destroy_popup(id)
-            }
+            // The applet lives on in the panel with nothing on screen.
+            Mode::Panel => destroy,
+            // A standalone menu is the whole process: it goes when the menu
+            // does, after a pause for anything it launched.
             Mode::Shortcut => {
                 let generation = self.opened;
                 let exit = Task::perform(tokio::time::sleep(crate::shortcut::LINGER), move |()| {
                     cosmic::action::app(Message::Exit(generation))
                 });
-                Task::batch([
-                    cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface(id),
-                    exit,
-                ])
+                Task::batch([destroy, exit])
             }
         }
     }
@@ -693,6 +650,7 @@ impl Application for App {
             had_focus: false,
             focus_losses: 0,
             popup: None,
+            closed_by_focus: None,
             // Peeked, not loaded: the panel button's icon and the shortcut
             // surface's position are needed before the first full load, and
             // peek never seeds a missing file.
@@ -739,14 +697,36 @@ impl Application for App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::TogglePopup => {
+                // The panel button does not draw the menu itself: it asks the
+                // menu process to appear, or to go away if it is already up.
+                // That process owns a name on the bus, so however the menu is
+                // asked for — this button or the keyboard shortcut — there is
+                // only ever one of it.
+                if self.mode == Mode::Panel {
+                    crate::remote::spawn_menu();
+                    return Task::none();
+                }
                 if self.popup.is_some() {
                     return self.close_popup();
+                }
+                if is_the_closing_click(self.closed_by_focus, std::time::Instant::now()) {
+                    self.closed_by_focus = None;
+                    return Task::none();
                 }
                 self.open()
             }
             Message::Focused => {
                 self.had_focus = true;
-                text_input::focus(self.search_id.clone())
+                let focus = text_input::focus(self.search_id.clone());
+                // The surface asks for the keyboard outright so it has it the
+                // moment it maps; held that way the compositor never takes it
+                // back, so a click on another window raised no `Unfocused` and
+                // the menu stayed open. Once focus is actually here, hand the
+                // keyboard back to on-demand so clicking away loses it.
+                match self.popup {
+                    Some(id) => Task::batch([focus, crate::shortcut::release_keyboard(id)]),
+                    None => focus,
+                }
             }
             Message::Unfocused => {
                 if !self.had_focus {
@@ -766,6 +746,7 @@ impl Application for App {
                 if self.had_focus || loss != self.focus_losses {
                     return Task::none();
                 }
+                self.closed_by_focus = Some(std::time::Instant::now());
                 self.close_popup()
             }
             Message::Exit(generation) => {
@@ -1238,12 +1219,23 @@ impl Application for App {
                 .map(|d| Message::TileNumber(d as usize)),
             _ => None,
         });
-        if self.mode == Mode::Panel {
-            return Subscription::batch([remote, keys]);
-        }
         let focus = cosmic::iced::event::listen_with(|event, _status, _id| match event {
             cosmic::iced::Event::Window(window::Event::Focused) => Some(Message::Focused),
             cosmic::iced::Event::Window(window::Event::Unfocused) => Some(Message::Unfocused),
+            // A layer surface loses the keyboard as a Wayland event, not a
+            // window one: iced turns a keyboard leave into
+            // `window::Event::Unfocused` for ordinary windows only. Watching
+            // for the window event alone was why clicking another window
+            // never closed the menu, however long you waited.
+            cosmic::iced::Event::PlatformSpecific(
+                cosmic::iced::event::PlatformSpecific::Wayland(
+                    cosmic::iced::event::wayland::Event::Layer(layer, ..),
+                ),
+            ) => match layer {
+                cosmic::iced::event::wayland::LayerEvent::Focused => Some(Message::Focused),
+                cosmic::iced::event::wayland::LayerEvent::Unfocused => Some(Message::Unfocused),
+                cosmic::iced::event::wayland::LayerEvent::Done => Some(Message::Unfocused),
+            },
             _ => None,
         });
         Subscription::batch([remote, keys, focus])
@@ -1366,17 +1358,10 @@ impl Application for App {
                     .position(popover::Position::Point(ctx.at));
             }
         }
-        if self.mode == Mode::Shortcut {
-            return container(with_menu)
-                .class(cosmic::theme::Container::custom(
-                    crate::shortcut::card_style,
-                ))
-                .into();
-        }
-        self.core
-            .applet
-            .popup_container(with_menu)
-            .limits(popup_limits(self.width()))
+        container(with_menu)
+            .class(cosmic::theme::Container::custom(
+                crate::shortcut::card_style,
+            ))
             .into()
     }
 }
@@ -1455,31 +1440,21 @@ mod tests {
     }
 
     #[test]
-    fn blur_stays_inside_the_rounded_corners() {
-        let rects = blur_region(700.0, 600.0, 16.0);
-        let covers = |x: f32, y: f32| {
-            rects
-                .iter()
-                .any(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
-        };
-        // The corner squares are left alone…
-        for (x, y) in [(1.0, 1.0), (699.0, 1.0), (1.0, 599.0), (699.0, 599.0)] {
-            assert!(!covers(x, y), "({x},{y}) should be unblurred");
-        }
-        // …while the edges' midpoints and the centre are blurred.
-        for (x, y) in [
-            (350.0, 1.0),
-            (350.0, 599.0),
-            (1.0, 300.0),
-            (699.0, 300.0),
-            (350.0, 300.0),
-        ] {
-            assert!(covers(x, y), "({x},{y}) should be blurred");
-        }
-        // A radius bigger than the popup cannot produce negative sizes.
-        for r in blur_region(20.0, 10.0, 50.0) {
-            assert!(r.width >= 0.0 && r.height >= 0.0);
-        }
+    fn the_click_that_closed_the_menu_cannot_reopen_it() {
+        let now = std::time::Instant::now();
+        // The panel button's press closes the menu by moving the keyboard,
+        // and the toggle it sends lands a moment later.
+        assert!(is_the_closing_click(
+            Some(now - std::time::Duration::from_millis(50)),
+            now
+        ));
+        // A press a second later is someone asking for the menu again.
+        assert!(!is_the_closing_click(
+            Some(now - std::time::Duration::from_secs(2)),
+            now
+        ));
+        // Nothing closed it: this is a plain open.
+        assert!(!is_the_closing_click(None, now));
     }
 
     #[test]

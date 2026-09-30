@@ -62,3 +62,24 @@ pub fn claim() -> Claim {
 pub fn requests() -> Option<mpsc::UnboundedReceiver<()>> {
     REQUESTS.get()?.lock().ok()?.take()
 }
+
+/// Spawn this binary with `--toggle`: open the menu, or close the one that is
+/// already up.
+///
+/// The panel button goes through the same door as the keyboard shortcut. The
+/// menu has to be a layer surface to take the keyboard, an applet cannot host
+/// one (asking for it from inside the panel's event loop draws nothing), and
+/// two ways in that each made their own menu could put two on screen at once.
+/// One process, claimed by name, is therefore the only menu there can be, and
+/// a second press of either trigger closes it.
+pub fn spawn_menu() {
+    let Ok(executable) = std::env::current_exe() else {
+        tracing::error!("could not determine our own path; cannot open the menu");
+        return;
+    };
+    let mut command = std::process::Command::new(executable);
+    command.arg("--toggle");
+    if let Err(err) = crate::process::spawn_and_reap(command) {
+        tracing::error!("could not open the menu: {err}");
+    }
+}
