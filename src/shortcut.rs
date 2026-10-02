@@ -80,12 +80,15 @@ const EDGE: i32 = 8;
 /// `popup_container` is an autosize widget that resizes the panel's popup,
 /// and has no business resizing a layer surface.
 ///
-/// Always the opaque background: the blur request that frosts the panel
-/// popup does not take on this layer surface, and the frosted colour with
-/// nothing blurred behind it left the menu hard to read over windows.
+/// The background layer's colour, translucent when the theme is frosted —
+/// the same `background(theme.transparent)` every card inside the menu
+/// already uses, so the frame cannot be opaque while its tiles are glass.
+/// `App::open` asks the compositor to blur behind the surface; without that
+/// request the translucent fill has nothing behind it and the menu reads as
+/// a flat wash over whatever window it covers.
 pub fn card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
-    let background = cosmic.background(false);
+    let background = cosmic.background(theme.transparent);
     // A light hairline rather than the divider grey: it catches the top and
     // left edges and makes the card sit *in* the desktop, not on it.
     let mut edge: cosmic::iced::Color = background.divider.into();

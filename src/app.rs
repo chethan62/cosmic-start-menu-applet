@@ -85,6 +85,39 @@ const FOCUS_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
 /// reopen the menu the same click had just dismissed.
 const REOPEN_GUARD: std::time::Duration = std::time::Duration::from_millis(600);
 
+/// The blur region behind the frosted menu, shaped to stay inside its
+/// rounded corners. The compositor blurs rectangles as given — a single
+/// whole-surface rectangle put square blurred corners behind the frame's
+/// rounded ones, poking out at the menu's bottom. A cross of three
+/// rectangles leaves the four `radius`×`radius` corner squares unblurred;
+/// what remains of those squares inside the arc is a few pixels under an
+/// already-translucent film.
+fn blur_region(width: f32, height: f32, radius: f32) -> Vec<cosmic::iced::Rectangle> {
+    let r = radius.clamp(0.0, width.min(height) / 2.0);
+    vec![
+        // The middle band, full height.
+        cosmic::iced::Rectangle {
+            x: r,
+            y: 0.0,
+            width: (width - 2.0 * r).max(0.0),
+            height,
+        },
+        // The side bands, inset past the corner arcs.
+        cosmic::iced::Rectangle {
+            x: 0.0,
+            y: r,
+            width: r,
+            height: (height - 2.0 * r).max(0.0),
+        },
+        cosmic::iced::Rectangle {
+            x: width - r,
+            y: r,
+            width: r,
+            height: (height - 2.0 * r).max(0.0),
+        },
+    ]
+}
+
 /// Whether a toggle arriving now is the tail of the click that just closed
 /// the menu.
 fn is_the_closing_click(closed: Option<std::time::Instant>, now: std::time::Instant) -> bool {
@@ -447,6 +480,39 @@ impl App {
         Task::batch([popup, load, focus])
     }
 
+    /// Ask the compositor to blur what is behind the menu, so the card's
+    /// translucent fill reads as COSMIC's frosted glass rather than a flat
+    /// wash over whatever window it covers.
+    ///
+    /// libcosmic only blurs surfaces it tracks in `surface_views` — the main
+    /// window and `surface-message` surfaces — and a layer surface asked for
+    /// with `get_layer_surface` is in neither, so nothing requests it for us.
+    ///
+    /// Sent once the surface has the keyboard rather than in the batch that
+    /// creates it: the menu *is* this process's first surface, so that batch
+    /// runs before the Wayland platform is up and the request went nowhere —
+    /// the card turned translucent with nothing blurred behind it.
+    ///
+    /// The region is shaped to the frame's corners: the menu is exactly
+    /// `width()` × `POPUP_HEIGHT`, and `card_style` rounds it by the theme's
+    /// medium radius, so a whole-surface rectangle showed square blurred
+    /// corners outside the arcs.
+    fn blur(&self) -> Task<Message> {
+        let theme = self.core.system_theme();
+        let Some(id) = self.popup else {
+            return Task::none();
+        };
+        if !self.core.frosted(theme.cosmic()) {
+            return Task::none();
+        }
+        let radius = theme.cosmic().corner_radii.radius_m[0];
+        cosmic::iced::platform_specific::shell::commands::blur::blur(
+            id,
+            Some(blur_region(self.width(), POPUP_HEIGHT, radius)),
+        )
+        .discard()
+    }
+
     fn close_popup(&mut self) -> Task<Message> {
         self.reset_popup_state();
         let Some(id) = self.popup.take() else {
@@ -724,7 +790,9 @@ impl Application for App {
                 // the menu stayed open. Once focus is actually here, hand the
                 // keyboard back to on-demand so clicking away loses it.
                 match self.popup {
-                    Some(id) => Task::batch([focus, crate::shortcut::release_keyboard(id)]),
+                    Some(id) => {
+                        Task::batch([focus, crate::shortcut::release_keyboard(id), self.blur()])
+                    }
                     None => focus,
                 }
             }
@@ -1455,6 +1523,34 @@ mod tests {
         ));
         // Nothing closed it: this is a plain open.
         assert!(!is_the_closing_click(None, now));
+    }
+
+    #[test]
+    fn blur_stays_inside_the_rounded_corners() {
+        let rects = blur_region(700.0, 600.0, 16.0);
+        let covers = |x: f32, y: f32| {
+            rects
+                .iter()
+                .any(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
+        };
+        // The corner squares are left alone…
+        for (x, y) in [(1.0, 1.0), (699.0, 1.0), (1.0, 599.0), (699.0, 599.0)] {
+            assert!(!covers(x, y), "({x},{y}) should be unblurred");
+        }
+        // …while the edges' midpoints and the centre are blurred.
+        for (x, y) in [
+            (350.0, 1.0),
+            (350.0, 599.0),
+            (1.0, 300.0),
+            (699.0, 300.0),
+            (350.0, 300.0),
+        ] {
+            assert!(covers(x, y), "({x},{y}) should be blurred");
+        }
+        // A radius bigger than the menu cannot produce negative sizes.
+        for r in blur_region(20.0, 10.0, 50.0) {
+            assert!(r.width >= 0.0 && r.height >= 0.0);
+        }
     }
 
     #[test]
