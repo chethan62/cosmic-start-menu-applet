@@ -52,11 +52,18 @@ pub(crate) fn popup_limits(width: f32) -> Limits {
 /// How this process shows the menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// The panel button, with the menu as its popup.
+    /// The panel button. It draws no menu of its own: it asks the menu
+    /// process for one, and starts that process at login so the first press
+    /// has nothing to wait for.
     Panel,
-    /// `--toggle` from a keyboard shortcut: the menu as a layer surface of
-    /// its own, open from the start, and the process ends when it closes.
-    Shortcut,
+    /// The menu itself, as a layer surface of its own — the only kind of
+    /// surface the compositor hands the keyboard to.
+    ///
+    /// `shown` is false for `--prewarm`: the process starts, claims its bus
+    /// name and waits with nothing on screen until a press arrives. A cold
+    /// open had to build the app index before it could draw, and showed a
+    /// blank card for ~350 ms doing it.
+    Shortcut { shown: bool },
 }
 
 /// Which search result the keyboard selection lands on.
@@ -92,37 +99,88 @@ const FOCUS_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
 /// reopen the menu the same click had just dismissed.
 const REOPEN_GUARD: std::time::Duration = std::time::Duration::from_millis(600);
 
-/// The blur region behind the frosted menu, shaped to stay inside its
-/// rounded corners. The compositor blurs rectangles as given — a single
-/// whole-surface rectangle put square blurred corners behind the frame's
-/// rounded ones, poking out at the menu's bottom. A cross of three
-/// rectangles leaves the four `radius`×`radius` corner squares unblurred;
-/// what remains of those squares inside the arc is a few pixels under an
-/// already-translucent film.
+/// The blur region behind the frosted menu, shaped to the frame's rounded
+/// corners.
+///
+/// The compositor blurs the rectangles it is given and nothing else, so the
+/// seam between blurred and unblurred shows *through* the card's translucent
+/// fill. A single whole-surface rectangle put square blurred corners outside
+/// the arcs; a cross of three rectangles, which simply leaves the four
+/// `radius`x`radius` corner squares alone, moved the same square inside the
+/// frame — the fill over an unblurred square read as a square corner sitting
+/// in each rounded one.
+///
+/// So the corners are stepped instead: a stack of thin bands, each only as
+/// wide as the arc allows at its outermost row, which keeps every rectangle
+/// strictly inside the curve. The seam then follows the corner and the
+/// widest step it can be wrong by is one band.
 fn blur_region(width: f32, height: f32, radius: f32) -> Vec<cosmic::iced::Rectangle> {
-    let r = radius.clamp(0.0, width.min(height) / 2.0);
-    vec![
-        // The middle band, full height.
-        cosmic::iced::Rectangle {
-            x: r,
-            y: 0.0,
-            width: (width - 2.0 * r).max(0.0),
-            height,
-        },
-        // The side bands, inset past the corner arcs.
-        cosmic::iced::Rectangle {
-            x: 0.0,
-            y: r,
-            width: r,
-            height: (height - 2.0 * r).max(0.0),
-        },
-        cosmic::iced::Rectangle {
-            x: width - r,
-            y: r,
-            width: r,
-            height: (height - 2.0 * r).max(0.0),
-        },
-    ]
+    use cosmic::iced::Rectangle;
+
+    /// A rectangle, unless it has no area. Every value reaching here is a
+    /// whole number of pixels.
+    fn push(out: &mut Vec<Rectangle>, x: f32, y: f32, width: f32, height: f32) {
+        if width > 0.0 && height > 0.0 {
+            out.push(Rectangle {
+                x,
+                y,
+                width,
+                height,
+            });
+        }
+    }
+
+    // Whole pixels throughout. libcosmic's `apply_blur` sends x, y, width and
+    // height through `.round()` each on its own, so a band that starts on a
+    // fraction and has a fractional height rounds away from its neighbour:
+    // at radius 16 the twelve 1.33 px bands left rows 2, 6, 10 and 14 of
+    // every corner uncovered — hairlines up to 15 px wide, inside the curve,
+    // with sharp background showing through the frost. Snapping the band
+    // *edges* first and deriving each height from them means rounding has
+    // nothing left to move.
+    //
+    // The surface is `width as u32` wide, so the frame is the floor.
+    let w = width.floor().max(0.0);
+    let h = height.floor().max(0.0);
+    let r = radius.clamp(0.0, w.min(h) / 2.0);
+    // The corner squares in whole pixels. Past `r` the edge is straight, so
+    // the extra fraction of a pixel is ordinary frame.
+    let corner = r.ceil().min((w.min(h) / 2.0).floor());
+
+    let mut out = Vec::new();
+    // The middle band, full height.
+    push(&mut out, corner, 0.0, w - 2.0 * corner, h);
+    // The side bands, between the arcs.
+    push(&mut out, 0.0, corner, corner, h - 2.0 * corner);
+    push(&mut out, w - corner, corner, corner, h - 2.0 * corner);
+
+    // One band per pixel of radius, up to a dozen: past that the steps are
+    // smaller than the blur's own softness and only cost rectangles.
+    let steps = (corner as usize).clamp(1, 12);
+    for i in 0..steps {
+        let y0 = (corner * i as f32 / steps as f32).floor();
+        let y1 = (corner * (i + 1) as f32 / steps as f32).floor();
+        if y1 <= y0 {
+            continue;
+        }
+        // Measured at the band's outermost row, where the arc bites deepest,
+        // and the left edge rounded *inward*, so the band can never poke out
+        // past the curve.
+        let inset = if y0 >= r {
+            0.0
+        } else {
+            let dy = r - y0;
+            r - (r * r - dy * dy).max(0.0).sqrt()
+        };
+        let left = inset.ceil();
+        let band = corner - left;
+        for x in [left, w - corner] {
+            for y in [y0, h - y1] {
+                push(&mut out, x, y, band, y1 - y0);
+            }
+        }
+    }
+    out
 }
 
 /// Whether a toggle arriving now is the tail of the click that just closed
@@ -131,20 +189,108 @@ fn is_the_closing_click(closed: Option<std::time::Instant>, now: std::time::Inst
     closed.is_some_and(|at| now.duration_since(at) < REOPEN_GUARD)
 }
 
+/// How long after asking for a surface a toggle still counts as the tail of
+/// the press that opened it. A cold first open has to map a surface and take
+/// the keyboard, which is the slow case this has to cover.
+const OPEN_GUARD: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Whether a toggle should be ignored because the menu it would close has
+/// not appeared yet.
+///
+/// Both ways in spawn a copy of this binary, which finds the bus name taken
+/// and pokes the menu that holds it. A second press landing in the moment
+/// between the first one asking for the surface and the compositor mapping
+/// it therefore closed a menu the user never saw — and any even number of
+/// fast presses left nothing on screen at all. A menu that has not yet held
+/// the keyboard has not been seen, so there is nothing to dismiss.
+///
+/// Bounded in time rather than left to the focus flag alone. A surface can
+/// be born without ever gaining focus — two presses coalescing into one
+/// batch destroy and recreate it in the same breath, and the new one came up
+/// unfocused — and an unbounded guard then ignored every press after it, so
+/// a visible menu could not be closed at all. After the window the press
+/// goes through, whatever the surface did.
+fn ignores_toggle(
+    opened_at: Option<std::time::Instant>,
+    had_focus: bool,
+    now: std::time::Instant,
+) -> bool {
+    !had_focus && opened_at.is_some_and(|at| now.duration_since(at) < OPEN_GUARD)
+}
+
+/// What to do with a background reload when it lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnLoad {
+    /// Put it on screen now.
+    Apply,
+    /// Hold it until the next open.
+    Stash,
+    /// Throw it away: something newer is already applied or held.
+    Drop,
+}
+
+/// Never change what is on screen while the menu is open.
+///
+/// Every open re-reads the apps, launch history and config off-thread, and
+/// the first frame is drawn from what the process already holds. The usage
+/// file is written on every launch, so Most used and Recent are always one
+/// open stale — and the letter sections are built *excluding* whatever that
+/// block shows, so a different five apps re-flowed the whole list beneath it
+/// and letter sections came and went. After an idle gap the page cache is
+/// cold, the reload lands late, and the menu visibly jumped under the user.
+///
+/// So a reload landing on a populated, open menu is held back and drawn from
+/// the next open's first frame. It still applies at once when there is
+/// nothing on screen to jump: the menu is closed (the pre-warm, or a reload
+/// that finished after close), or it is the empty first card.
+///
+/// The trade-off, agreed: an app installed while the menu is open during the
+/// load shows up one open later than before.
+///
+/// "Newest" is the load *started* last, not the one that finished last. A
+/// press at login while the pre-warm's load is still crawling a cold cache
+/// starts a second load; that one can finish first and fill the empty card,
+/// and the pre-warm's older result then landed on a populated menu, was held,
+/// and replaced the newer data at the next open. `generation` is when this
+/// result was started; `newest` is the latest one applied or held.
+fn on_load(popup_open: bool, populated: bool, generation: u64, newest: u64) -> OnLoad {
+    if generation <= newest {
+        return OnLoad::Drop;
+    }
+    if popup_open && populated {
+        OnLoad::Stash
+    } else {
+        OnLoad::Apply
+    }
+}
+
+/// Whether a `FocusGone` check, scheduled `FOCUS_GRACE` ago, should close the
+/// menu and arm the reopen guard.
+///
+/// It must not arm the guard when the menu has already gone by some other
+/// route — a toggle, Escape, a launch. Arming it then swallowed the *next*
+/// press, roughly 200-800 ms after the click that closed the menu, for a menu
+/// that was no longer there to reopen.
+fn focus_loss_closes(popup_open: bool, had_focus: bool, losses: u64, loss: u64) -> bool {
+    popup_open && !had_focus && loss == losses
+}
+
 pub struct App {
     core: Core,
     mode: Mode,
-    /// Bumped whenever a shortcut menu opens, so an exit scheduled by an
-    /// earlier close can tell it is stale.
-    opened: u64,
-    /// Whether the shortcut menu has had the keyboard yet. The surface
-    /// reports losing focus once before it first gains it, which is not a
-    /// click away.
+    /// Whether the menu has had the keyboard since it last opened. The
+    /// surface reports losing focus once before it first gains it, which is
+    /// not a click away; and a menu that has never held the keyboard has not
+    /// been seen, so a toggle must not close it.
     had_focus: bool,
     /// Counts `Unfocused` events, so a `FocusGone` check can tell whether
     /// focus came back (a `Focused` in between) since it was scheduled.
     focus_losses: u64,
     popup: Option<Id>,
+    /// When the surface for the menu now on screen was asked for, so a
+    /// toggle arriving while it is still coming up can be told from one
+    /// meant to dismiss it. See [`ignores_toggle`].
+    opened_at: Option<std::time::Instant>,
     /// When the menu last closed itself for losing the keyboard, so the click
     /// that did it cannot reopen it. See [`REOPEN_GUARD`].
     closed_by_focus: Option<std::time::Instant>,
@@ -169,6 +315,14 @@ pub struct App {
     mode_menu: bool,
     /// Bumped on every config edit; a save result older than this is stale.
     edit_gen: u64,
+    /// A reload that landed while the menu was open and populated, held for
+    /// the next open. See [`on_load`]. Only ever the newest one.
+    pending: Option<Box<Loaded>>,
+    /// The generation of the newest load started, and of the newest one
+    /// applied or held. A result at or below the second is older than what
+    /// is already on screen or in `pending`, and is dropped.
+    load_started: u64,
+    load_newest: u64,
     favs: Vec<String>,
     recent: Vec<String>,
     right_menu: bool,
@@ -305,8 +459,6 @@ pub enum Message {
     /// `FOCUS_GRACE` after an `Unfocused`: close if the keyboard has not
     /// come back since. The number is the `focus_losses` count it belongs to.
     FocusGone(u64),
-    /// A shortcut menu closed `LINGER` ago; exit unless it reopened since.
-    Exit(u64),
     /// Something back from COSMIC's launcher service.
     Launcher(crate::launcher::Reply),
     /// Run one of the launcher's results.
@@ -382,6 +534,10 @@ pub enum Message {
 
 #[derive(Debug, Clone)]
 pub struct Loaded {
+    /// When this load was *started*, from `App::load_started`. Two loads can
+    /// be in flight at once and finish in either order, so the order they
+    /// land in says nothing about which is newer.
+    pub generation: u64,
     pub apps: Vec<AppEntry>,
     pub most_used: Vec<String>,
     pub config: Config,
@@ -394,7 +550,7 @@ pub struct Loaded {
 
 /// Read the app index, launch history and config. Blocking file I/O, so it
 /// runs on the blocking pool, never in `update`.
-fn load() -> Loaded {
+fn load(generation: u64) -> Loaded {
     let apps = crate::apps::load_all();
     let ids: std::collections::HashSet<&str> = apps.iter().map(|a| a.id.as_str()).collect();
     let usage = crate::usage::Usage::path()
@@ -402,9 +558,14 @@ fn load() -> Loaded {
         .unwrap_or_default();
     let most_used = usage.top(5, &ids);
     let recent = usage.recent(crate::usage::RECENT_CAP, &ids);
-    let config = Config::load();
+    // The index the config needs for first-run seeding is the one just
+    // built: `Config::load` would otherwise read every desktop file a
+    // second time, doubling the cost of every open.
+    let installed: Vec<String> = apps.iter().map(|a| a.id.clone()).collect();
+    let config = Config::load_with(&installed);
     let (folders, loose) = crate::folders::load(&apps);
     Loaded {
+        generation,
         apps,
         most_used,
         config,
@@ -531,13 +692,32 @@ impl App {
         self.selected = 0;
         self.context = None;
         self.nav = None;
+        // A reload held back while the menu was last open goes in now, before
+        // the surface is asked for, so this open draws it from its first
+        // frame. Applied here rather than at close: the closing surface can
+        // still be drawn from the update that destroys it, and here there is
+        // no surface at all to paint, focus or scroll. Every close leads to
+        // this open, whichever way the menu went away.
+        //
+        // Its config is not applied. It was read before any edit made while
+        // that menu was open, and the peek just below re-reads the file — the
+        // in-menu edits and anything the Settings window saved since — so the
+        // stashed copy could only ever be the older one.
+        if let Some(loaded) = self.pending.take() {
+            self.apply_loaded(*loaded, false);
+        }
         // The width and position depend on settings, and the full load
         // below only delivers after the popup is placed; edits are saved as
         // they are made, so the file is current.
         self.config = Config::peek();
         let id = window::Id::unique();
         self.popup = Some(id);
-        self.opened = self.opened.wrapping_add(1);
+        // Every open starts not-yet-seen: `ignores_toggle` reads this, and
+        // the process is resident now, so a value left over from the last
+        // open would let a double press close a menu that is still mapping.
+        self.had_focus = false;
+        self.opened_at = Some(std::time::Instant::now());
+        tracing::debug!("menu opening");
         // One surface kind for both ways in. As a panel popup the menu could
         // not be closed by clicking the button again without a race, could
         // not take the keyboard unless a click handed it over, and a second
@@ -545,12 +725,57 @@ impl App {
         // focusable, dismissable and the only menu there is.
         let popup = crate::shortcut::surface(id, self.width(), self.config.menu_position);
 
-        // Re-read apps, history and config on every open, off-thread:
-        // an app installed a minute ago shows up, and edits made in the
-        // Settings window apply, without a file watcher.
-        let load = Task::perform(
-            async {
-                tokio::task::spawn_blocking(load)
+        let load = self.reload();
+
+        // Focused straight away so typing searches, as in Windows.
+        let focus = text_input::focus(self.search_id.clone());
+
+        // Blur first: the request has to be stashed before the surface is
+        // created for `get_layer_surface` to install it on the first commit.
+        Task::batch([self.blur(), popup, load, focus])
+    }
+
+    /// Put a reload's data in place. Fields only: it returns no task, so it
+    /// can never move focus or scroll anything by itself.
+    ///
+    /// `with_config` is false for a stashed reload, whose config is older
+    /// than the file `open` re-reads right after.
+    fn apply_loaded(&mut self, loaded: Loaded, with_config: bool) {
+        let Loaded {
+            generation: _,
+            apps,
+            most_used,
+            config,
+            folders,
+            loose,
+            favs,
+            recent,
+            avatar,
+        } = loaded;
+        self.favs = favs;
+        self.recent = recent;
+        self.avatar = avatar;
+        self.folders = folders;
+        self.loose = loose;
+        self.apps = apps;
+        self.usage_top = most_used;
+        if with_config {
+            self.config = config;
+        }
+    }
+
+    /// Read the app index, launch history and config off-thread.
+    ///
+    /// Run on every open, so an app installed a minute ago shows up and edits
+    /// made in the Settings window apply, without a file watcher — and once
+    /// more at pre-warm, so the menu has real data to draw with before the
+    /// first press rather than the blank card it shows with none.
+    fn reload(&mut self) -> Task<Message> {
+        self.load_started = self.load_started.wrapping_add(1);
+        let generation = self.load_started;
+        Task::perform(
+            async move {
+                tokio::task::spawn_blocking(move || load(generation))
                     .await
                     .map_err(|e| e.to_string())
             },
@@ -558,12 +783,7 @@ impl App {
                 Ok(l) => cosmic::action::app(Message::Loaded(Box::new(l))),
                 Err(e) => cosmic::action::app(Message::ShowError(e)),
             },
-        );
-
-        // Focused straight away so typing searches, as in Windows.
-        let focus = text_input::focus(self.search_id.clone());
-
-        Task::batch([popup, load, focus])
+        )
     }
 
     /// Ask the compositor to blur what is behind the menu, so the card's
@@ -574,10 +794,24 @@ impl App {
     /// window and `surface-message` surfaces — and a layer surface asked for
     /// with `get_layer_surface` is in neither, so nothing requests it for us.
     ///
-    /// Sent once the surface has the keyboard rather than in the batch that
-    /// creates it: the menu *is* this process's first surface, so that batch
-    /// runs before the Wayland platform is up and the request went nowhere —
-    /// the card turned translucent with nothing blurred behind it.
+    /// Asked for twice: once in the batch that creates the surface, and again
+    /// when it takes the keyboard.
+    ///
+    /// The first is what frosts the menu from its first frame. A blur request
+    /// for an id with no surface yet is not dropped — libcosmic stashes it in
+    /// `pending_blur`, and `get_layer_surface` drains that and installs the
+    /// region before its own commit. Waiting for focus instead left the card
+    /// clear for the 160-500 ms until the focus event landed: the window
+    /// behind it was legible straight through, and the compositor's open
+    /// animation played over those frames.
+    ///
+    /// The second is a backstop for a cold start, where the creating request
+    /// is lost for two reasons that do not apply to any later open:
+    /// `ext_background_effect_manager` may not be bound yet on the process's
+    /// very first surface, and `apply_blur` then logs "Blur effect is not
+    /// supported." and drops the region; and the theme may not have loaded,
+    /// so `frosted()` is still false. Setting the region twice is harmless —
+    /// an already-blurred surface just has its region updated.
     ///
     /// The region is shaped to the frame's corners: the menu is exactly
     /// `width()` × `POPUP_HEIGHT`, and `card_style` rounds it by the theme's
@@ -604,23 +838,17 @@ impl App {
         let Some(id) = self.popup.take() else {
             return Task::none();
         };
-        let destroy =
-            cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface(
-                id,
-            );
-        match self.mode {
-            // The applet lives on in the panel with nothing on screen.
-            Mode::Panel => destroy,
-            // A standalone menu is the whole process: it goes when the menu
-            // does, after a pause for anything it launched.
-            Mode::Shortcut => {
-                let generation = self.opened;
-                let exit = Task::perform(tokio::time::sleep(crate::shortcut::LINGER), move |()| {
-                    cosmic::action::app(Message::Exit(generation))
-                });
-                Task::batch([destroy, exit])
-            }
-        }
+        tracing::debug!("menu closed");
+        // The surface goes; the process stays. A standalone menu used to
+        // exit a moment after closing, which meant every open paid for a
+        // fresh process — a visible lag, a first frame drawn with no apps in
+        // it, and a race where a press landing on the dying copy did
+        // nothing. Resident, it keeps serving toggles over its bus name and
+        // every open after the first is instant. Nothing is left behind: the
+        // surface is destroyed, `reset_popup_state` has already cleared
+        // everything that belonged to this opening, and the next open asks
+        // for a new surface id.
+        cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface(id)
     }
 
     /// Apply a change to the config: at once to the copy on screen, and to
@@ -663,6 +891,12 @@ impl App {
         self.found.clear();
         self.nav = None;
         self.list_offset = 0.0;
+        self.opened_at = None;
+        // Folder indices point into `self.folders`, which is rebuilt from the
+        // App Library on every load. The process used to exit between opens,
+        // so this cleared itself; now it lives all session, and a retained
+        // index would expand whichever folder had taken that place.
+        self.open_folders.clear();
     }
 
     /// The apps drawn in the pinned block, which the sections below it
@@ -745,7 +979,7 @@ impl App {
             // theme has loaded: the default theme's spacing made the surface
             // too narrow for Spacious gaps, squeezing the last tile column.
             // One source for both the size and the layout keeps them agreeing.
-            Mode::Shortcut => Spacing::from_density(),
+            Mode::Shortcut { .. } => Spacing::from_density(),
         }
     }
 
@@ -803,11 +1037,12 @@ impl App {
         (refs, cells)
     }
 
-    /// How many stops each zone has right now. While a search is on, none of
-    /// them: the results have their own arrow keys and Enter, and Tab must
-    /// not take the keyboard out of the box mid-query.
+    /// How many stops each zone has right now.
     fn counts(&self) -> keynav::Counts {
-        if !self.query.trim().is_empty() {
+        // Nothing is drawn at all while the first load is in flight, and the
+        // results have their own arrow keys and Enter while a search is on —
+        // Tab must not take the keyboard out of the box mid-query.
+        if self.apps.is_empty() || !self.query.trim().is_empty() {
             return keynav::Counts::default();
         }
         keynav::Counts {
@@ -1074,10 +1309,10 @@ impl Application for App {
         let mut app = Self {
             core,
             mode,
-            opened: 0,
             had_focus: false,
             focus_losses: 0,
             popup: None,
+            opened_at: None,
             closed_by_focus: None,
             // Peeked, not loaded: the panel button's icon and the shortcut
             // surface's position are needed before the first full load, and
@@ -1100,6 +1335,9 @@ impl Application for App {
             open_folders: std::collections::HashSet::new(),
             mode_menu: false,
             edit_gen: 0,
+            pending: None,
+            load_started: 0,
+            load_newest: 0,
             favs: Vec::new(),
             recent: Vec::new(),
             right_menu: false,
@@ -1111,8 +1349,17 @@ impl Application for App {
             list_view: LIST_VIEWPORT,
         };
         let open = match mode {
-            Mode::Panel => Task::none(),
-            Mode::Shortcut => app.open(),
+            Mode::Panel => {
+                // Start the menu process now, closed and invisible, so the
+                // user's first press finds it already loaded. The applet is
+                // exec'd once per session, so this runs once.
+                crate::remote::prewarm();
+                Task::none()
+            }
+            Mode::Shortcut { shown: true } => app.open(),
+            // Pre-warmed: read everything now and wait for a press, so the
+            // first open draws the real menu instead of a blank card.
+            Mode::Shortcut { shown: false } => app.reload(),
         };
         (app, open)
     }
@@ -1128,6 +1375,11 @@ impl Application for App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::TogglePopup => {
+                tracing::debug!(
+                    open = self.popup.is_some(),
+                    seen = self.had_focus,
+                    "toggle received"
+                );
                 // The panel button does not draw the menu itself: it asks the
                 // menu process to appear, or to go away if it is already up.
                 // That process owns a name on the bus, so however the menu is
@@ -1135,6 +1387,9 @@ impl Application for App {
                 // only ever one of it.
                 if self.mode == Mode::Panel {
                     crate::remote::spawn_menu();
+                    return Task::none();
+                }
+                if ignores_toggle(self.opened_at, self.had_focus, std::time::Instant::now()) {
                     return Task::none();
                 }
                 if self.popup.is_some() {
@@ -1148,6 +1403,7 @@ impl Application for App {
             }
             Message::Focused => {
                 self.had_focus = true;
+                tracing::debug!("menu has the keyboard");
                 let focus = text_input::focus(self.search_id.clone());
                 // The surface asks for the keyboard outright so it has it the
                 // moment it maps; held that way the compositor never takes it
@@ -1176,17 +1432,16 @@ impl Application for App {
                 })
             }
             Message::FocusGone(loss) => {
-                if self.had_focus || loss != self.focus_losses {
+                if !focus_loss_closes(
+                    self.popup.is_some(),
+                    self.had_focus,
+                    self.focus_losses,
+                    loss,
+                ) {
                     return Task::none();
                 }
                 self.closed_by_focus = Some(std::time::Instant::now());
                 self.close_popup()
-            }
-            Message::Exit(generation) => {
-                if self.popup.is_none() && generation == self.opened {
-                    return cosmic::iced::exit();
-                }
-                Task::none()
             }
             Message::PopupClosed(id) => {
                 if self.popup == Some(id) {
@@ -1196,29 +1451,40 @@ impl Application for App {
                 Task::none()
             }
             Message::Loaded(loaded) => {
-                let Loaded {
-                    apps,
-                    most_used,
-                    config,
-                    folders,
-                    loose,
-                    favs,
-                    recent,
-                    avatar,
-                } = *loaded;
-                self.favs = favs;
-                self.recent = recent;
-                self.avatar = avatar;
-                self.folders = folders;
-                self.loose = loose;
-                self.apps = apps;
-                self.usage_top = most_used;
-                self.config = config;
-                // Every index a highlight could hold came from the old,
-                // empty lists — but the reload lands a moment after the menu
-                // opens, so dropping the highlight outright would undo a Tab
-                // pressed in between.
-                self.renav()
+                let was_empty = self.apps.is_empty();
+                let generation = loaded.generation;
+                match on_load(
+                    self.popup.is_some(),
+                    !was_empty,
+                    generation,
+                    self.load_newest,
+                ) {
+                    // Older than what is shown or held: nothing changes.
+                    OnLoad::Drop => Task::none(),
+                    // Nothing on screen changes, so nothing about the
+                    // highlight, focus or scroll position may either.
+                    OnLoad::Stash => {
+                        self.load_newest = generation;
+                        self.pending = Some(loaded);
+                        Task::none()
+                    }
+                    OnLoad::Apply => {
+                        self.load_newest = generation;
+                        // Anything still held back is older than this.
+                        self.pending = None;
+                        self.apply_loaded(*loaded, true);
+                        // The highlight's indices came from the old, empty
+                        // lists — but the reload lands a moment after the
+                        // menu opens, so dropping it outright would undo a
+                        // Tab pressed in between.
+                        let nav = self.renav();
+                        // An empty card had no search box for `open` to focus.
+                        if was_empty && self.nav.is_none() && self.popup.is_some() {
+                            return Task::batch([nav, text_input::focus(self.search_id.clone())]);
+                        }
+                        nav
+                    }
+                }
             }
             Message::Launch(i) => {
                 let Some(app) = self.apps.get(i).cloned() else {
@@ -1759,6 +2025,34 @@ impl Application for App {
     }
 
     fn view_window(&self, _id: Id) -> Element<'_, Message> {
+        // The first open of a fresh process has no apps yet: the load runs
+        // off-thread and lands a moment later. Drawing the real layout now
+        // would show every tile group as an "empty group" caption over a
+        // one-row list, and the whole menu would visibly jump as the data
+        // arrived. An empty card simply fills in. With the process resident
+        // this is seen once per session at most.
+        //
+        // A load that failed, though, leaves the card empty for good, so the
+        // error goes on it: a featureless card with nothing to explain it
+        // would be the end of the road.
+        if self.apps.is_empty() {
+            let body: Element<'_, Message> = match &self.error {
+                Some(e) => container(text::body(e.clone()))
+                    .padding(24)
+                    .width(Length::Fixed(self.width()))
+                    .height(Length::Fixed(POPUP_HEIGHT))
+                    .into(),
+                None => cosmic::widget::Space::new()
+                    .width(Length::Fixed(self.width()))
+                    .height(Length::Fixed(POPUP_HEIGHT))
+                    .into(),
+            };
+            return container(body)
+                .class(cosmic::theme::Container::custom(
+                    crate::shortcut::card_style,
+                ))
+                .into();
+        }
         let spacing = self.spacing();
         let search = text_input::search_input(fl!("search-placeholder"), &self.query)
             .id(self.search_id.clone())
@@ -1836,6 +2130,7 @@ impl Application for App {
                 &self.avatar,
                 &self.config.system_panel,
                 self.focus_in(Zone::Rail),
+                spacing.section,
             ),
             main,
         ])
@@ -1844,11 +2139,16 @@ impl Application for App {
 
         let mut body = column::with_capacity(2).push(columns);
         if let Some(e) = &self.error {
-            body = body.push(text::caption(e.clone()));
+            // The card's left inset now belongs to the rail, so anything
+            // else in the body has to carry its own.
+            body =
+                body.push(container(text::caption(e.clone())).padding([0, 0, 0, spacing.section]));
         }
 
+        // No left padding: the rail owns it, and centres its glyphs across
+        // the whole strip from the card's edge to the hairline.
         let body = container(body.spacing(spacing.gap))
-            .padding(spacing.section)
+            .padding([spacing.section, spacing.section, spacing.section, 0])
             .width(Length::Fixed(self.width()))
             .height(Length::Fixed(POPUP_HEIGHT));
 
@@ -2000,6 +2300,79 @@ mod tests {
     }
 
     #[test]
+    fn a_reload_never_changes_a_populated_open_menu() {
+        // A fresh result (generation 2 over 1 already shown).
+        // Open and already drawn from real data: held for the next open,
+        // or the list jumps under the user.
+        assert_eq!(on_load(true, true, 2, 1), OnLoad::Stash);
+        // The empty first card: nothing to jump from, fill it in.
+        assert_eq!(on_load(true, false, 2, 1), OnLoad::Apply);
+        // Closed — the pre-warm, or a reload that finished after close.
+        assert_eq!(on_load(false, true, 2, 1), OnLoad::Apply);
+        assert_eq!(on_load(false, false, 1, 0), OnLoad::Apply);
+    }
+
+    #[test]
+    fn an_older_load_never_lands_on_newer_data() {
+        // The login race: the pre-warm's load (1) is still running when a
+        // press starts another (2). Load 2 finishes first and fills the
+        // empty card…
+        assert_eq!(on_load(true, false, 2, 0), OnLoad::Apply);
+        // …so load 1, landing late on the populated menu, is dropped rather
+        // than held and applied over newer data at the next open.
+        assert_eq!(on_load(true, true, 1, 2), OnLoad::Drop);
+        // Whatever the menu is doing, and even for a repeat of the same one.
+        assert_eq!(on_load(false, true, 1, 2), OnLoad::Drop);
+        assert_eq!(on_load(false, false, 2, 2), OnLoad::Drop);
+        // A newer one still goes through as usual.
+        assert_eq!(on_load(true, true, 3, 2), OnLoad::Stash);
+    }
+
+    #[test]
+    fn a_toggle_cannot_close_a_menu_that_has_not_appeared_yet() {
+        let now = std::time::Instant::now();
+        let just_now = Some(now - std::time::Duration::from_millis(50));
+        // Both triggers spawn a copy that pokes the running menu, so a
+        // second press landing while the surface is still mapping used to
+        // close a menu nobody had seen — any even number of fast presses
+        // left nothing on screen.
+        assert!(ignores_toggle(just_now, false, now));
+        // Once it has the keyboard it has been seen, so a press dismisses it.
+        assert!(!ignores_toggle(just_now, true, now));
+        // Nothing open: this is a plain open, whatever focus has done.
+        assert!(!ignores_toggle(None, false, now));
+        assert!(!ignores_toggle(None, true, now));
+    }
+
+    #[test]
+    fn a_surface_that_never_appears_can_still_be_dismissed() {
+        let now = std::time::Instant::now();
+        // A surface destroyed and recreated in one batch came up without
+        // focus; an unguarded wait on the focus flag then ignored every
+        // press and the menu could not be closed at all.
+        let long_ago = Some(now - std::time::Duration::from_secs(5));
+        assert!(!ignores_toggle(long_ago, false, now));
+        // Just inside the window it is still the tail of the opening press.
+        let edge = Some(now - (OPEN_GUARD - std::time::Duration::from_millis(1)));
+        assert!(ignores_toggle(edge, false, now));
+    }
+
+    #[test]
+    fn only_a_focus_loss_that_still_has_a_menu_arms_the_reopen_guard() {
+        // The ordinary case: the menu is up, focus has not come back, and
+        // this is the newest loss.
+        assert!(focus_loss_closes(true, false, 3, 3));
+        // The menu went by some other route — a toggle, Escape, a launch —
+        // while the check was in flight. Arming the guard here swallowed the
+        // press *after* the one that closed the menu.
+        assert!(!focus_loss_closes(false, false, 3, 3));
+        // Focus came back: a keyboard device appearing, not a click away.
+        assert!(!focus_loss_closes(true, true, 3, 3));
+        // A stale check from an earlier loss.
+        assert!(!focus_loss_closes(true, false, 4, 3));
+    }
+
+    #[test]
     fn the_click_that_closed_the_menu_cannot_reopen_it() {
         let now = std::time::Instant::now();
         // The panel button's press closes the menu by moving the keyboard,
@@ -2017,31 +2390,114 @@ mod tests {
         assert!(!is_the_closing_click(None, now));
     }
 
+    /// The region as the compositor receives it: libcosmic's `apply_blur`
+    /// sends each field through `.round() as i32` on its own. The old test
+    /// checked the exact geometry, which was right, and so could not see the
+    /// rows that rounding opened up.
+    fn as_sent(rects: &[cosmic::iced::Rectangle]) -> Vec<(i32, i32, i32, i32)> {
+        rects
+            .iter()
+            .map(|r| {
+                (
+                    r.x.round() as i32,
+                    r.y.round() as i32,
+                    r.width.round() as i32,
+                    r.height.round() as i32,
+                )
+            })
+            .collect()
+    }
+
+    fn covered(rects: &[(i32, i32, i32, i32)], px: i32, py: i32) -> bool {
+        rects
+            .iter()
+            .any(|&(x, y, w, h)| px >= x && px < x + w && py >= y && py < y + h)
+    }
+
+    /// Whether a pixel's centre is inside a `w`x`h` frame rounded by `r`.
+    fn inside_frame(px: i32, py: i32, w: f32, h: f32, r: f32) -> bool {
+        let (cx, cy) = (px as f32 + 0.5, py as f32 + 0.5);
+        // Fold every corner onto the top-left one.
+        let fx = cx.min(w - cx);
+        let fy = cy.min(h - cy);
+        if fx >= r || fy >= r {
+            return true;
+        }
+        let (dx, dy) = (r - fx, r - fy);
+        dx * dx + dy * dy <= r * r
+    }
+
     #[test]
-    fn blur_stays_inside_the_rounded_corners() {
-        let rects = blur_region(700.0, 600.0, 16.0);
-        let covers = |x: f32, y: f32| {
-            rects
-                .iter()
-                .any(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
-        };
-        // The corner squares are left alone…
-        for (x, y) in [(1.0, 1.0), (699.0, 1.0), (1.0, 599.0), (699.0, 599.0)] {
-            assert!(!covers(x, y), "({x},{y}) should be unblurred");
-        }
-        // …while the edges' midpoints and the centre are blurred.
-        for (x, y) in [
-            (350.0, 1.0),
-            (350.0, 599.0),
-            (1.0, 300.0),
-            (699.0, 300.0),
-            (350.0, 300.0),
+    fn blur_stays_inside_the_rounded_corners_once_rounded() {
+        // Every built-in roundness, and a fractional radius and width the
+        // theme or the density setting could produce.
+        for (w, h, radius) in [
+            (700.0, 600.0, 0.0),
+            (700.0, 600.0, 2.0),
+            (700.0, 600.0, 4.0),
+            (700.0, 600.0, 8.0),
+            (700.0, 600.0, 12.0),
+            (700.0, 600.0, 16.0),
+            (700.4, 600.0, 10.5),
         ] {
-            assert!(covers(x, y), "({x},{y}) should be blurred");
+            let sent = as_sent(&blur_region(w, h, radius));
+            let (wi, hi) = (w as i32, h as i32);
+            let r = radius;
+            let corner = r.ceil() as i32;
+            for py in 0..hi {
+                for px in 0..wi {
+                    let on = covered(&sent, px, py);
+                    // Never outside the curve, where sharp background would
+                    // show beyond the card's rounded edge.
+                    if on {
+                        assert!(
+                            inside_frame(px, py, w.floor(), h, r),
+                            "r={radius}: ({px},{py}) is blurred outside the arc"
+                        );
+                    }
+                }
+            }
+            // Never a row left out inside the curve: the corner's innermost
+            // column is inside the arc on every row below the outermost band
+            // (which the arc makes zero-width by design), so it must be
+            // blurred — this is where rows 2, 6, 10 and 14 went missing.
+            let steps = corner.clamp(1, 12);
+            let first_band = (corner / steps).max(1);
+            for y in first_band..corner {
+                for (px, py) in [
+                    (corner - 1, y),
+                    (wi - corner, y),
+                    (corner - 1, hi - 1 - y),
+                    (wi - corner, hi - 1 - y),
+                ] {
+                    assert!(
+                        covered(&sent, px, py),
+                        "r={radius}: ({px},{py}) inside the curve is not blurred"
+                    );
+                }
+            }
+            // Everything outside the corner squares is blurred.
+            for (px, py) in [(wi / 2, 0), (wi / 2, hi - 1), (0, hi / 2), (wi - 1, hi / 2)] {
+                assert!(
+                    covered(&sent, px, py),
+                    "r={radius}: ({px},{py}) not blurred"
+                );
+            }
+            // And no rectangle is empty or inside out.
+            assert!(sent.iter().all(|&(_, _, w, h)| w > 0 && h > 0));
         }
-        // A radius bigger than the menu cannot produce negative sizes.
+    }
+
+    #[test]
+    fn a_square_frame_is_one_rectangle() {
+        let sent = as_sent(&blur_region(700.0, 600.0, 0.0));
+        assert_eq!(sent, vec![(0, 0, 700, 600)]);
+    }
+
+    #[test]
+    fn a_radius_bigger_than_the_menu_cannot_produce_negative_sizes() {
         for r in blur_region(20.0, 10.0, 50.0) {
-            assert!(r.width >= 0.0 && r.height >= 0.0);
+            assert!(r.width > 0.0 && r.height > 0.0);
         }
     }
 

@@ -370,11 +370,22 @@ impl Config {
 
     /// Load from the real path, seeding (and saving) on first run.
     pub fn load() -> Config {
-        let installed: Vec<String> = crate::apps::load_all().into_iter().map(|a| a.id).collect();
+        Self::load_with(
+            &crate::apps::load_all()
+                .into_iter()
+                .map(|a| a.id)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// As [`load`](Self::load), with the app index the caller has already
+    /// built. Scanning the desktop entries again here read all 174 files a
+    /// second time on every open, for a list only first-run seeding looks at.
+    pub fn load_with(installed: &[String]) -> Config {
         let favorites = favorites_text();
         match Self::path() {
-            Some(p) => Self::load_from(&p, &installed, favorites.as_deref()),
-            None => Self::seeded(&installed, favorites.as_deref()),
+            Some(p) => Self::load_from(&p, installed, favorites.as_deref()),
+            None => Self::seeded(installed, favorites.as_deref()),
         }
     }
 

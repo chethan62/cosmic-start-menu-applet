@@ -12,6 +12,11 @@ use crate::config::MenuPosition;
 
 /// Window settings for [`Mode::Shortcut`](crate::app::Mode::Shortcut): no window of its own, only the
 /// layer surface the menu opens.
+///
+/// `exit_on_close(false)` with `no_main_window(true)` is what lets the
+/// process outlive its surface: the event loop's "last window closed, exit"
+/// checks are for winit windows, and a layer surface is not one, so closing
+/// the menu leaves the loop running and serving toggles.
 pub fn window_settings() -> cosmic::app::Settings {
     cosmic::app::Settings::default()
         .no_main_window(true)
@@ -19,10 +24,6 @@ pub fn window_settings() -> cosmic::app::Settings {
         .exit_on_close(false)
         .debug(false)
 }
-
-/// How long a closed shortcut menu lingers before exiting, so a launch it
-/// started has been handed off, and a quick second press can reopen it.
-pub const LINGER: std::time::Duration = std::time::Duration::from_millis(1500);
 
 /// The shortcut menu's surface: bottom-left, just above the panel (the
 /// compositor keeps it out of the panel's reserved strip). It has to hold

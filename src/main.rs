@@ -39,13 +39,32 @@ fn main() -> cosmic::iced::Result {
         return cosmic::app::run::<settings::Settings>(settings::window_settings(), ());
     }
 
-    // `--toggle` is for keyboard shortcuts: the menu as its own surface, so
-    // it gets the keyboard; or, if one is open, close it.
-    if std::env::args().skip(1).any(|arg| arg == "--toggle") {
-        if remote::claim() == remote::Claim::AlreadyOpen {
-            return Ok(());
+    // `--toggle` is for keyboard shortcuts and the panel button: the menu as
+    // its own surface, so it gets the keyboard; or, if one is open, close it.
+    // `--prewarm` is the same process started early and left closed.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match remote::start_mode(args.iter().map(String::as_str)) {
+        remote::Start::Toggle => {
+            if remote::claim() == remote::Claim::AlreadyOpen {
+                return Ok(());
+            }
+            return cosmic::app::run::<app::App>(
+                shortcut::window_settings(),
+                app::Mode::Shortcut { shown: true },
+            );
         }
-        return cosmic::app::run::<app::App>(shortcut::window_settings(), app::Mode::Shortcut);
+        remote::Start::Prewarm => {
+            // Claimed without poking: poking would open a menu nobody asked
+            // for, at login.
+            if remote::claim_silently() == remote::Claim::AlreadyOpen {
+                return Ok(());
+            }
+            return cosmic::app::run::<app::App>(
+                shortcut::window_settings(),
+                app::Mode::Shortcut { shown: false },
+            );
+        }
+        remote::Start::No => {}
     }
 
     cosmic::applet::run::<app::App>(app::Mode::Panel)

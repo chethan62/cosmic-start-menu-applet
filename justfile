@@ -56,6 +56,11 @@ install: build
 restart:
     #!/usr/bin/env bash
     set -euo pipefail
+    # The menu is its own long-lived process now, and it owns the bus name:
+    # the panel applet's pre-warm finds the name taken and exits, so the
+    # button would go on poking the build from before this install. Cycling
+    # `plugins_wings` only ever restarts the applet, one level above it.
+    pkill -f 'cosmic-start-menu-applet --(toggle|prewarm)' || true
     wings="$HOME/.config/cosmic/com.system76.CosmicPanel.Panel/v1/plugins_wings"
     if ! grep -q '{{appid}}' "$wings" 2>/dev/null; then
         echo "Not in the panel; nothing to restart."

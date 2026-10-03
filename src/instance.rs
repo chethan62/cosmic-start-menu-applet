@@ -98,6 +98,22 @@ where
     }
 }
 
+/// How long to wait for a dying owner to drop the name before claiming it.
+/// Long enough for a process already on its way out to finish releasing,
+/// short enough that a press never feels dropped.
+const RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// Whether a name request's reply means the name is ours now. Anything else
+/// — in the queue, exists, or zbus 5's `NameTaken` error — means somebody
+/// else holds it.
+fn became_owner(reply: &zbus::Result<zbus::fdo::RequestNameReply>) -> bool {
+    use zbus::fdo::RequestNameReply;
+    matches!(
+        reply,
+        Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner)
+    )
+}
+
 /// The connection when this process now owns the name; `None` when another
 /// does, after poking it.
 async fn register<I, P, F>(
@@ -111,10 +127,12 @@ where
     P: FnOnce(zbus::Connection) -> F,
     F: Future<Output = zbus::Result<()>>,
 {
-    use zbus::fdo::{RequestNameFlags, RequestNameReply};
+    use zbus::fdo::RequestNameFlags;
 
     let connection = zbus::Connection::session().await?;
     connection.object_server().at(path, object).await?;
+
+    let request = || connection.request_name_with_flags(name, RequestNameFlags::DoNotQueue.into());
 
     // `DO_NOT_QUEUE` is what makes this a test rather than a wait: without it
     // a second copy would sit in the queue and take the name the moment the
@@ -125,17 +143,46 @@ where
     // the error. Reaching for the reply was why `--settings` once opened a new
     // window every time. Any other reply (`InQueue` should not happen with
     // `DO_NOT_QUEUE`) is treated as taken too.
-    match connection
-        .request_name_with_flags(name, RequestNameFlags::DoNotQueue.into())
-        .await
-    {
-        Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => Ok(Some(connection)),
-        Ok(_) | Err(zbus::Error::NameTaken) => {
-            if let Err(err) = poke(connection).await {
-                tracing::debug!("could not reach the running copy of {name}: {err}");
-            }
-            Ok(None)
+    let reply = request().await;
+    if became_owner(&reply) {
+        return Ok(Some(connection));
+    }
+    if let Err(err) = reply {
+        // Not "taken" at all: a real bus failure, which the caller reads as
+        // "no bus, carry on as the only copy".
+        if !matches!(err, zbus::Error::NameTaken) {
+            return Err(err);
         }
-        Err(err) => Err(err),
+    }
+    let Err(err) = poke(connection.clone()).await else {
+        return Ok(None);
+    };
+    // The owner could not be reached: almost always a copy that was exiting
+    // as this press landed, so the press would otherwise do nothing at all.
+    // Wait for the name to be released and try to become the owner instead.
+    tracing::debug!("could not reach the running copy of {name}: {err}; claiming it instead");
+    tokio::time::sleep(RETRY_PAUSE).await;
+    if became_owner(&request().await) {
+        return Ok(Some(connection));
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zbus::fdo::RequestNameReply;
+
+    #[test]
+    fn only_primary_or_already_owner_means_the_name_is_ours() {
+        assert!(became_owner(&Ok(RequestNameReply::PrimaryOwner)));
+        // Re-requesting a name we hold is still ours — the retry after a
+        // failed poke can land on this.
+        assert!(became_owner(&Ok(RequestNameReply::AlreadyOwner)));
+        // Somebody else has it. zbus 5 reports the usual case as an error
+        // rather than a reply, which is why both shapes are checked.
+        assert!(!became_owner(&Ok(RequestNameReply::Exists)));
+        assert!(!became_owner(&Ok(RequestNameReply::InQueue)));
+        assert!(!became_owner(&Err(zbus::Error::NameTaken)));
     }
 }

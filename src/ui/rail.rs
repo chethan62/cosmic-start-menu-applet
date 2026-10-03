@@ -168,11 +168,18 @@ pub fn slot_face(slot: Slot) -> (&'static str, &'static str) {
     }
 }
 
+/// `lead` is the card's own left inset. The rail takes it into its own
+/// width instead of being pushed clear of it: the strip the eye reads is
+/// the one bounded by the card's edge and the hairline, so the glyphs have
+/// to be centred in *that*, not in the 56 px box that starts after the
+/// padding. Left outside, the same 16 px padding that gives the list its
+/// air sat the icons visibly right of their own column.
 pub fn view<'a>(
     power_open: bool,
     account: &Avatar,
     panel: &SystemPanel,
     focus: Option<usize>,
+    lead: u16,
 ) -> Element<'a, Message> {
     // Avatar, then the default-app cluster right under it, then all the
     // slack, then Settings and Power as one bottom cluster. Built by walking
@@ -224,7 +231,7 @@ pub fn view<'a>(
     row::with_children(vec![
         container(col)
             .padding([RAIL_PAD, 0, RAIL_PAD, 0])
-            .width(Length::Fixed(RAIL_WIDTH))
+            .width(Length::Fixed(RAIL_WIDTH + f32::from(lead)))
             .height(Length::Fill)
             .into(),
         v_hairline(),

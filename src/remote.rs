@@ -42,14 +42,58 @@ static REQUESTS: OnceLock<Mutex<Option<mpsc::UnboundedReceiver<()>>>> = OnceLock
 
 pub use crate::instance::Claim;
 
+/// What a command line asks of the menu process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    /// `--toggle`: show the menu, or close the one already up.
+    Toggle,
+    /// `--prewarm`: become the menu process and wait, with nothing on
+    /// screen, so the first real press has nothing to load.
+    Prewarm,
+    /// Neither: this invocation is the panel applet.
+    No,
+}
+
+/// Read the two menu flags off a command line. An explicit press wins over a
+/// pre-warm, so a stray `--prewarm` can never swallow a `--toggle`.
+pub fn start_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> Start {
+    let mut found = Start::No;
+    for arg in args {
+        match arg {
+            "--toggle" => return Start::Toggle,
+            "--prewarm" => found = Start::Prewarm,
+            _ => {}
+        }
+    }
+    found
+}
+
 /// Become the shortcut menu, or toggle the one already running.
 pub fn claim() -> Claim {
+    claim_name(true)
+}
+
+/// Become the menu process without disturbing one that is already there.
+///
+/// The pre-warm at panel start must not poke: the poke *is* the toggle, so a
+/// second panel in the session, or an applet restart, would open a menu
+/// nobody asked for.
+pub fn claim_silently() -> Claim {
+    claim_name(false)
+}
+
+fn claim_name(poke_it: bool) -> Claim {
     let (claim, requests) = crate::instance::claim(
         "start-menu-remote",
         NAME,
         PATH,
         |requests| Service { requests },
-        |connection| async move { RemoteProxy::new(&connection).await?.toggle().await },
+        move |connection| async move {
+            if !poke_it {
+                return Ok(());
+            }
+            RemoteProxy::new(&connection).await?.toggle().await
+        },
     );
     if let Some(requests) = requests {
         let _ = REQUESTS.set(Mutex::new(Some(requests)));
@@ -73,13 +117,41 @@ pub fn requests() -> Option<mpsc::UnboundedReceiver<()>> {
 /// One process, claimed by name, is therefore the only menu there can be, and
 /// a second press of either trigger closes it.
 pub fn spawn_menu() {
+    spawn_with("--toggle");
+}
+
+/// Start the menu process at panel start, closed and invisible, so the first
+/// press finds the app index already read. A cold open showed a blank card
+/// for ~350 ms while it built one.
+pub fn prewarm() {
+    spawn_with("--prewarm");
+}
+
+fn spawn_with(arg: &'static str) {
     let Ok(executable) = std::env::current_exe() else {
         tracing::error!("could not determine our own path; cannot open the menu");
         return;
     };
     let mut command = std::process::Command::new(executable);
-    command.arg("--toggle");
+    command.arg(arg);
     if let Err(err) = crate::process::spawn_and_reap(command) {
-        tracing::error!("could not open the menu: {err}");
+        tracing::error!("could not start the menu ({arg}): {err}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_command_line_says_whether_to_show_the_menu() {
+        assert_eq!(start_mode(["--toggle"]), Start::Toggle);
+        assert_eq!(start_mode(["--prewarm"]), Start::Prewarm);
+        assert_eq!(start_mode([]), Start::No);
+        assert_eq!(start_mode(["--settings"]), Start::No);
+        // A press beats a pre-warm whichever order they arrive in, so a
+        // stray flag can never leave a press with nothing on screen.
+        assert_eq!(start_mode(["--prewarm", "--toggle"]), Start::Toggle);
+        assert_eq!(start_mode(["--toggle", "--prewarm"]), Start::Toggle);
     }
 }
