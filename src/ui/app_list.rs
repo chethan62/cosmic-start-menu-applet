@@ -265,7 +265,12 @@ fn category_header<'a>(key: &'static str) -> Element<'a, Message> {
 }
 
 /// A folder row: folder glyph on a tinted base, name, count, chevron.
-fn folder_row<'a>(index: usize, folder: &'a Folder, open: bool) -> Element<'a, Message> {
+fn folder_row<'a>(
+    index: usize,
+    folder: &'a Folder,
+    open: bool,
+    selected: bool,
+) -> Element<'a, Message> {
     let base = container(icon::from_name("folder-symbolic").size(14))
         .center(Length::Fixed(f32::from(ICON)))
         .class(cosmic::theme::Container::Custom(Box::new(|theme| {
@@ -295,7 +300,11 @@ fn folder_row<'a>(index: usize, folder: &'a Folder, open: bool) -> Element<'a, M
     .spacing(12)
     .align_y(Alignment::Center);
     button::custom(centred(body))
-        .class(quiet_button())
+        .class(if selected {
+            selected_button()
+        } else {
+            quiet_button()
+        })
         .padding([0, ROW_GUTTER])
         .width(Length::Fill)
         .height(Length::Fixed(ROW_HEIGHT))
@@ -338,65 +347,178 @@ pub fn pinned(
     top
 }
 
-pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
-    let list = v.apps;
-    let mut col = column::with_capacity(list.len() + 40).spacing(0);
-    // The pinned zone: the apps he actually opens, above the first letter
-    // or category header in every mode, closed by a rule so it cannot be
-    // mistaken for one more alphabet section.
-    let top = pinned(list, v.most_used, v.recent, v.show_most_used);
-    if !top.is_empty() {
-        col = col.push(section_label(fl!("most-used")));
-        for i in top.iter().copied() {
-            col = col.push(app_row(&list[i], i, false));
+/// One line of the middle column, in the order it is drawn. The plan is the
+/// single description of the column: the renderer walks it, and so does the
+/// keyboard — which is the only way a highlight and a scroll offset can be
+/// sure they mean the same row as the one on screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Line {
+    /// A quiet block label ("Most used", "Folders").
+    Label(String),
+    /// A letter header, which also opens the jump grid.
+    Letter(char),
+    /// A category header, by l10n key.
+    Category(&'static str),
+    /// An installed app, by its index in `apps`.
+    App(usize),
+    Folder {
+        index: usize,
+        open: bool,
+    },
+    /// An app inside an open folder: the same row, indented.
+    FolderApp(usize),
+    /// The Start Menu Settings entry, the last line of the column.
+    Settings,
+}
+
+/// What Enter does on a line the keyboard can land on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Act {
+    /// Launch the app at this index.
+    App(usize),
+    /// Open or close this folder.
+    Folder(usize),
+    /// Open the Start Menu's own settings.
+    Settings,
+}
+
+/// A line the keyboard can land on: what it does, and where it sits in the
+/// column, so the list can be scrolled to it. Headers and block labels are
+/// not stops — the highlight walks rows, not signposts.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stop {
+    pub act: Act,
+    pub y: f32,
+    pub h: f32,
+}
+
+/// What a line does, or `None` for a header or label.
+pub fn act(line: &Line) -> Option<Act> {
+    match *line {
+        Line::App(i) | Line::FolderApp(i) => Some(Act::App(i)),
+        Line::Folder { index, .. } => Some(Act::Folder(index)),
+        Line::Settings => Some(Act::Settings),
+        Line::Label(_) | Line::Letter(_) | Line::Category(_) => None,
+    }
+}
+
+/// Every line's drawn height, from the same constants the rows are built
+/// with — which is what keeps a letter jump and a keyboard scroll exact.
+pub fn line_height(line: &Line) -> f32 {
+    match line {
+        Line::Label(_) => ZONE_LABEL_HEIGHT,
+        Line::Letter(_) | Line::Category(_) => HEADER_HEIGHT,
+        _ => ROW_HEIGHT,
+    }
+}
+
+/// The stops of a plan, in order, each with how far down the column it is.
+pub fn stops(lines: &[Line]) -> Vec<Stop> {
+    let mut out = Vec::new();
+    let mut y = 0.0;
+    for line in lines {
+        let h = line_height(line);
+        if let Some(act) = act(line) {
+            out.push(Stop { act, y, h });
+        }
+        y += h;
+    }
+    out
+}
+
+/// The first stop under `letter`'s header, so a first-letter jump takes the
+/// highlight with it rather than leaving it behind off-screen.
+pub fn stop_at_letter(lines: &[Line], letter: char) -> Option<usize> {
+    let mut n = 0;
+    let mut arrived = false;
+    for line in lines {
+        if arrived && act(line).is_some() {
+            return Some(n);
+        }
+        if *line == Line::Letter(letter) {
+            arrived = true;
+        }
+        if act(line).is_some() {
+            n += 1;
         }
     }
-    let az = |mut col: cosmic::widget::Column<'a, Message, cosmic::Theme>,
-              sections: Vec<(char, Vec<usize>)>| {
+    None
+}
+
+/// Which lines the column draws, for this view's mode and state.
+pub fn plan(v: &ListView<'_>) -> Vec<Line> {
+    fn az(out: &mut Vec<Line>, sections: Vec<(char, Vec<usize>)>) {
         for (letter, idxs) in sections {
-            col = col.push(letter_header(letter));
-            for i in idxs {
-                col = col.push(app_row(&list[i], i, false));
-            }
+            out.push(Line::Letter(letter));
+            out.extend(idxs.into_iter().map(Line::App));
         }
-        col
-    };
+    }
+    let list = v.apps;
+    let mut out: Vec<Line> = Vec::with_capacity(list.len() + 40);
+    // The pinned zone: the apps he actually opens, above the first letter
+    // or category header in every mode.
+    let top = pinned(list, v.most_used, v.recent, v.show_most_used);
+    if !top.is_empty() {
+        out.push(Line::Label(fl!("most-used")));
+        out.extend(top.iter().copied().map(Line::App));
+    }
     // Every section is drawn without the apps the pinned block already
     // shows, so no app appears twice on the same screen.
-    col = match v.mode {
-        ListMode::Az => az(col, apps::sections_excluding(list, &top)),
+    match v.mode {
+        ListMode::Az => az(&mut out, apps::sections_excluding(list, &top)),
         ListMode::Category => {
             for (key, idxs) in apps::category_sections_excluding(list, &top) {
-                col = col.push(category_header(key));
-                for i in idxs {
-                    col = col.push(app_row(&list[i], i, false));
-                }
+                out.push(Line::Category(key));
+                out.extend(idxs.into_iter().map(Line::App));
             }
-            col
         }
         // No folders found (no App Library file, or an unreadable one) means
         // the plain A–Z list rather than an empty section.
-        ListMode::Folders if v.folders.is_empty() => az(col, apps::sections_excluding(list, &top)),
+        ListMode::Folders if v.folders.is_empty() => {
+            az(&mut out, apps::sections_excluding(list, &top));
+        }
         ListMode::Folders => {
-            col = col.push(section_label(fl!("folders")));
+            out.push(Line::Label(fl!("folders")));
             for (fi, folder) in v.folders.iter().enumerate() {
                 let open = v.open_folders.contains(&fi);
-                col = col.push(folder_row(fi, folder, open));
+                out.push(Line::Folder { index: fi, open });
                 if open {
-                    let inner = folder
-                        .apps
-                        .iter()
-                        .map(|&i| app_row(&list[i], i, false))
-                        .collect::<Vec<_>>();
-                    col = col.push(container(column::with_children(inner)).padding([0, 0, 0, 16]));
+                    out.extend(folder.apps.iter().copied().map(Line::FolderApp));
                 }
             }
-            az(col, apps::sections_of_excluding(list, v.loose, &top))
+            az(&mut out, apps::sections_of_excluding(list, v.loose, &top));
         }
-    };
-    // Last row of the list, under every section: Settings belongs with the
-    // apps rather than pinned beneath them.
-    col = col.push(settings_row());
+    }
+    // Last line, under every section: Settings belongs with the apps rather
+    // than pinned beneath them.
+    out.push(Line::Settings);
+    out
+}
+
+/// `focus` is the n'th stop of the plan, highlighted in the same accent
+/// tint a keyboard-selected search result wears.
+pub fn view<'a>(v: ListView<'a>, focus: Option<usize>) -> Element<'a, Message> {
+    let list = v.apps;
+    let lines = plan(&v);
+    let mut col = column::with_capacity(lines.len()).spacing(0);
+    let mut n = 0usize;
+    for line in lines {
+        let on = act(&line).is_some() && Some(n) == focus;
+        if act(&line).is_some() {
+            n += 1;
+        }
+        col = col.push(match line {
+            Line::Label(label) => section_label(label),
+            Line::Letter(letter) => letter_header(letter),
+            Line::Category(key) => category_header(key),
+            Line::App(i) => app_row(&list[i], i, on),
+            Line::FolderApp(i) => container(app_row(&list[i], i, on))
+                .padding([0, 0, 0, 16])
+                .into(),
+            Line::Folder { index, open } => folder_row(index, &v.folders[index], open, on),
+            Line::Settings => settings_row(on),
+        });
+    }
     thin_scroll(scrollable(container(col).padding([
         0,
         SCROLL_GUTTER,
@@ -404,6 +526,10 @@ pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
         0,
     ])))
     .id(v.list_id)
+    .on_scroll(|vp| Message::ListScrolled {
+        offset: vp.absolute_offset().y,
+        view: vp.bounds().height,
+    })
     .width(Length::Fixed(LIST_WIDTH))
     .height(Length::Fill)
     .into()
@@ -411,7 +537,7 @@ pub fn view<'a>(v: ListView<'a>) -> Element<'a, Message> {
 
 /// The "Start Menu Settings" entry: the last row of the app list, drawn like
 /// any installed app so it reads as one more item rather than a fixture.
-pub fn settings_row<'a>() -> Element<'a, Message> {
+pub fn settings_row<'a>(selected: bool) -> Element<'a, Message> {
     let body = row::with_children(vec![
         icon_box(icon::from_name("preferences-system").size(ICON).into()),
         text::body(fl!("menu-settings"))
@@ -421,7 +547,11 @@ pub fn settings_row<'a>() -> Element<'a, Message> {
     .spacing(12)
     .align_y(Alignment::Center);
     button::custom(centred(body))
-        .class(quiet_button())
+        .class(if selected {
+            selected_button()
+        } else {
+            quiet_button()
+        })
         .padding([0, ROW_GUTTER])
         .width(Length::Fill)
         .height(Length::Fixed(ROW_HEIGHT))
@@ -590,6 +720,95 @@ mod tests {
         let flat: Vec<usize> = out.iter().flat_map(|(_, v)| v.clone()).collect();
         assert_eq!(flat, vec![2, 1]);
         assert!(!flat.contains(&0));
+    }
+
+    fn view_of<'a>(
+        apps: &'a [App],
+        folders: &'a [Folder],
+        open: &'a HashSet<usize>,
+    ) -> ListView<'a> {
+        ListView {
+            apps,
+            most_used: &[],
+            recent: &[],
+            show_most_used: false,
+            mode: ListMode::Az,
+            folders,
+            loose: &[],
+            open_folders: open,
+            list_id: cosmic::widget::Id::new("test-list"),
+        }
+    }
+
+    #[test]
+    fn the_plan_is_headers_rows_and_settings_last() {
+        let apps = vec![app("a", "Alpha"), app("b", "Beta"), app("c", "Alfa")];
+        let open = HashSet::new();
+        let lines = plan(&view_of(&apps, &[], &open));
+        assert_eq!(
+            lines,
+            vec![
+                Line::Letter('A'),
+                Line::App(0),
+                Line::App(2),
+                Line::Letter('B'),
+                Line::App(1),
+                Line::Settings,
+            ]
+        );
+    }
+
+    #[test]
+    fn only_rows_are_stops_and_each_knows_how_far_down_it_is() {
+        let apps = vec![app("a", "Alpha"), app("b", "Beta")];
+        let open = HashSet::new();
+        let lines = plan(&view_of(&apps, &[], &open));
+        let stops = stops(&lines);
+        // Two apps and the Settings row; neither letter header is a stop.
+        assert_eq!(
+            stops.iter().map(|s| s.act).collect::<Vec<_>>(),
+            vec![Act::App(0), Act::App(1), Act::Settings]
+        );
+        assert_eq!(stops[0].y, HEADER_HEIGHT);
+        assert_eq!(stops[0].h, ROW_HEIGHT);
+        // The second app sits under its own header as well as the first row.
+        assert_eq!(stops[1].y, 2.0 * HEADER_HEIGHT + ROW_HEIGHT);
+        assert_eq!(stops[2].y, 2.0 * HEADER_HEIGHT + 2.0 * ROW_HEIGHT);
+    }
+
+    #[test]
+    fn a_folder_row_is_a_stop_that_opens_it() {
+        let apps = vec![app("a", "Alpha"), app("b", "Beta")];
+        let folders = vec![Folder {
+            name: "Office".into(),
+            apps: vec![1],
+        }];
+        let mut open = HashSet::new();
+        open.insert(0usize);
+        let mut v = view_of(&apps, &folders, &open);
+        v.mode = ListMode::Folders;
+        let lines = plan(&v);
+        assert!(lines.contains(&Line::Folder {
+            index: 0,
+            open: true
+        }));
+        // The open folder's app is drawn indented, and is a stop like any
+        // other row.
+        assert!(lines.contains(&Line::FolderApp(1)));
+        let acts: Vec<Act> = stops(&lines).into_iter().map(|s| s.act).collect();
+        assert_eq!(acts[0], Act::Folder(0));
+        assert_eq!(acts[1], Act::App(1));
+    }
+
+    #[test]
+    fn a_letter_jump_finds_the_first_row_of_that_section() {
+        let apps = vec![app("a", "Alpha"), app("b", "Beta"), app("c", "Bravo")];
+        let open = HashSet::new();
+        let lines = plan(&view_of(&apps, &[], &open));
+        assert_eq!(stop_at_letter(&lines, 'A'), Some(0));
+        assert_eq!(stop_at_letter(&lines, 'B'), Some(1));
+        // A letter with no section of its own is no jump at all.
+        assert_eq!(stop_at_letter(&lines, 'Z'), None);
     }
 
     #[test]

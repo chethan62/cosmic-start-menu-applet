@@ -11,10 +11,17 @@ use crate::apps::App as AppEntry;
 use crate::config::{Config, ListMode, RightSide, Slot, TileRef, TileSize};
 use crate::fl;
 use crate::folders::Folder;
+use crate::keynav::{self, Zone};
 use crate::session::Power;
 use crate::ui::{self, Spacing};
 
 pub const POPUP_HEIGHT: f32 = 600.0;
+/// What the app list's scroll viewport is worth before the column has
+/// reported its real height: the menu less the search box, the All-apps bar
+/// and the card's padding. Deliberately short of the truth — guessing small
+/// only scrolls to a row that was already showing, guessing large would
+/// leave the highlighted row off screen.
+const LIST_VIEWPORT: f32 = POPUP_HEIGHT - 140.0;
 /// Between the rail, the list and the tile column.
 const COLUMN_GAP: f32 = 12.0;
 
@@ -171,6 +178,13 @@ pub struct App {
     renaming: Option<(TileRef, TileField, String)>,
     /// The launcher's results for the current query, beyond apps.
     found: Vec<crate::launcher::Item>,
+    /// The one keyboard highlight, in one of the three zones. `None` means
+    /// the search box has the keyboard, which is how the menu opens.
+    nav: Option<keynav::Spot>,
+    /// Where the app list is scrolled to, and how tall its viewport is, so
+    /// a highlighted row can be brought into view with the smallest move.
+    list_offset: f32,
+    list_view: f32,
 }
 
 /// The account picture, or the initial to draw when there is none.
@@ -263,13 +277,21 @@ pub struct Context {
     pub at: Point,
 }
 
-/// Keys the search handles itself. Enter comes from the input's own submit,
-/// so it is not listened for here and cannot fire twice.
+/// Keys the open menu handles itself, whichever widget the press reached.
+/// Enter is not one of them: it arrives either from the search input's own
+/// submit or, once the keyboard has moved off the input, from the
+/// uncaptured-key listener.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
     Up,
     Down,
+    /// Sideways, which only the tile grid has.
+    Left,
+    Right,
     Escape,
+    /// Tab and Shift+Tab, which carry the highlight between zones.
+    Tab,
+    ShiftTab,
 }
 
 #[derive(Debug, Clone)]
@@ -313,7 +335,16 @@ pub enum Message {
     ShowError(String),
     OpenSettings,
     Query(String),
-    SearchKey(Key),
+    KeyPress(Key),
+    /// A plain letter with the highlight in the app list: a jump to that
+    /// letter's section rather than a character for the search box.
+    Letter(char),
+    /// The app list was scrolled, by the pointer or by us: where to, and
+    /// how tall its viewport actually is.
+    ListScrolled {
+        offset: f32,
+        view: f32,
+    },
     Submit,
     Pointer(Point),
     OpenContext(Target),
@@ -388,6 +419,8 @@ fn load() -> Loaded {
 /// What is open on top of the popup, for deciding what Escape closes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Layers {
+    /// A keyboard highlight is on something.
+    highlight: bool,
     context: bool,
     renaming: bool,
     power: bool,
@@ -402,6 +435,7 @@ struct Layers {
 /// What one press of Escape does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Escape {
+    DropHighlight,
     Context,
     CancelRename,
     Menus,
@@ -414,9 +448,13 @@ enum Escape {
 
 /// Escape peels one layer at a time, topmost first, and closes the whole
 /// popup only when nothing else is open — so dismissing a right-click menu
-/// or a search never throws the user out of the Start menu.
+/// or a search never throws the user out of the Start menu. The keyboard
+/// highlight is the top rung: one press puts the keyboard back in the search
+/// box, which is where the menu started.
 fn escape_target(l: Layers) -> Escape {
-    if l.context {
+    if l.highlight {
+        Escape::DropHighlight
+    } else if l.context {
         Escape::Context
     } else if l.renaming {
         Escape::CancelRename
@@ -435,6 +473,53 @@ fn escape_target(l: Layers) -> Escape {
     }
 }
 
+/// What a navigation key does when something modal is on top of the menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NavKeys {
+    /// Move the highlight as asked.
+    Move,
+    /// Refused; the keyboard goes back to the open rename draft.
+    HoldRename,
+    /// Refused; the keyboard goes back to the search box.
+    HoldSearch,
+}
+
+/// Whether a navigation key — Tab, Shift+Tab or an arrow onto the highlight
+/// — moves it right now, and if not, where the keyboard belongs instead.
+///
+/// A right-click menu and an open rename draft are both modal: nothing in
+/// either is focusable, so their keys arrive uncaptured and would otherwise
+/// walk the highlight behind them — and the next Enter would launch the
+/// highlighted row rather than acting on what was right-clicked.
+///
+/// Refusing is not enough on its own, because Tab has already done damage by
+/// the time we see it: libcosmic's text_input marks itself read-only on Tab
+/// and returns *without* consuming the press. Only a focus operation clears
+/// that — a click cannot, since the mouse-press reset is gated on an
+/// editable variant neither the search box nor the rename field is, and
+/// neither field has an `on_tab` or `on_unfocus` of its own. So a refused key
+/// hands the keyboard back to whichever input is open; left to do nothing it
+/// froze the draft so hard that only Escape, which throws the draft away,
+/// got out of it.
+///
+/// Escape is not one of these keys: its ladder already peels the top layer
+/// first.
+fn nav_keys(context: bool, renaming: bool) -> NavKeys {
+    if renaming {
+        NavKeys::HoldRename
+    } else if context {
+        NavKeys::HoldSearch
+    } else {
+        NavKeys::Move
+    }
+}
+
+/// Shorthand for the keys that only need refusing, never a refocus: Enter on
+/// the highlight and the first-letter jump, neither of which touches focus.
+fn nav_keys_live(context: bool, renaming: bool) -> bool {
+    nav_keys(context, renaming) == NavKeys::Move
+}
+
 impl App {
     /// Show the menu: a popup off the panel button, or in shortcut mode a
     /// layer surface the compositor gives the keyboard to.
@@ -445,6 +530,7 @@ impl App {
         self.query.clear();
         self.selected = 0;
         self.context = None;
+        self.nav = None;
         // The width and position depend on settings, and the full load
         // below only delivers after the popup is placed; edits are saved as
         // they are made, so the file is current.
@@ -547,7 +633,7 @@ impl App {
         self.context = None;
         self.edit_gen = self.edit_gen.wrapping_add(1);
         let generation = self.edit_gen;
-        Task::perform(
+        let save = Task::perform(
             async move {
                 tokio::task::spawn_blocking(move || Config::update(f))
                     .await
@@ -557,7 +643,9 @@ impl App {
                 Ok(saved) => cosmic::action::app(Message::ConfigSaved(generation, Box::new(saved))),
                 Err(e) => cosmic::action::app(Message::ShowError(e)),
             },
-        )
+        );
+        // The edit may have taken a tile out from under the highlight.
+        Task::batch([self.renav(), save])
     }
 
     /// Everything that belongs to one opening of the popup. Cleared however
@@ -573,6 +661,8 @@ impl App {
         self.query.clear();
         self.selected = 0;
         self.found.clear();
+        self.nav = None;
+        self.list_offset = 0.0;
     }
 
     /// The apps drawn in the pinned block, which the sections below it
@@ -607,7 +697,11 @@ impl App {
         ui::HEADER_HEIGHT + (self.folders.len() + open) as f32 * ui::ROW_HEIGHT
     }
 
-    fn scroll_list(&self, y: f32) -> Task<Message> {
+    /// Scroll the list, and remember where to: `scroll_to` is an operation
+    /// on the widget, not an event, so nothing reports back the offset we
+    /// asked for and the next keyboard move would measure from the old one.
+    fn scroll_list(&mut self, y: f32) -> Task<Message> {
+        self.list_offset = y;
         cosmic::iced::widget::scrollable::scroll_to(
             self.list_id.clone(),
             cosmic::iced::widget::scrollable::AbsoluteOffset {
@@ -663,6 +757,274 @@ impl App {
         } else {
             crate::launcher::search(q);
         }
+    }
+
+    // --- the keyboard highlight ------------------------------------------
+
+    /// The middle column's state, borrowed for drawing it and for walking it
+    /// with the keyboard — one description, so a highlight cannot land on a
+    /// row the column is not showing.
+    fn list_view(&self) -> ui::app_list::ListView<'_> {
+        ui::app_list::ListView {
+            apps: &self.apps,
+            most_used: &self.usage_top,
+            recent: &self.recent,
+            show_most_used: self.config.show_most_used,
+            mode: self.config.list_mode,
+            folders: &self.folders,
+            loose: &self.loose,
+            open_folders: &self.open_folders,
+            list_id: self.list_id.clone(),
+        }
+    }
+
+    /// Whether the browse list is on screen at all: a search replaces it
+    /// with results, and the letter grid replaces it with letters.
+    fn browsing(&self) -> bool {
+        self.query.trim().is_empty() && !self.letter_grid
+    }
+
+    /// Every row of the app list the keyboard can land on.
+    fn list_stops(&self) -> Vec<ui::app_list::Stop> {
+        if !self.browsing() {
+            return Vec::new();
+        }
+        ui::app_list::stops(&ui::app_list::plan(&self.list_view()))
+    }
+
+    /// The tiles the keyboard can land on, and the grid cells they occupy —
+    /// packed by the same packer the column draws them with.
+    fn tile_stops(&self) -> (Vec<TileRef>, Vec<crate::tile_layout::Placement>) {
+        if !self.query.trim().is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let (refs, groups) = ui::tiles::keyboard_tiles(&self.config, &self.apps);
+        let cells = keynav::tile_grid(&groups, self.config.tile_cells());
+        (refs, cells)
+    }
+
+    /// How many stops each zone has right now. While a search is on, none of
+    /// them: the results have their own arrow keys and Enter, and Tab must
+    /// not take the keyboard out of the box mid-query.
+    fn counts(&self) -> keynav::Counts {
+        if !self.query.trim().is_empty() {
+            return keynav::Counts::default();
+        }
+        keynav::Counts {
+            list: self.list_stops().len(),
+            tiles: self.tile_stops().0.len(),
+            rail: ui::rail::items(&self.config.system_panel).len(),
+        }
+    }
+
+    /// Which stop of `zone` is highlighted, if the highlight is there.
+    fn focus_in(&self, zone: Zone) -> Option<usize> {
+        self.nav.filter(|s| s.zone == zone).map(|s| s.index)
+    }
+
+    /// Take the keyboard off the search box. iced's focus operation unfocuses
+    /// every focusable it is not aiming at, so aiming it at an id no widget
+    /// carries is how an input is blurred — otherwise a plain letter would
+    /// still type into the box while the highlight was elsewhere.
+    fn blur_search() -> Task<Message> {
+        text_input::focus(cosmic::widget::Id::new("start-menu-nowhere"))
+    }
+
+    /// Put the highlight somewhere, or take it away. Gaining a highlight
+    /// takes the keyboard off the search box; losing one hands it straight
+    /// back, so Escape always leaves the menu ready to type into.
+    fn set_nav(&mut self, spot: Option<keynav::Spot>) -> Task<Message> {
+        let had = self.nav.is_some();
+        self.nav = spot;
+        match (had, self.nav.is_some()) {
+            (false, true) => Task::batch([Self::blur_search(), self.reveal_nav()]),
+            (true, false) => text_input::focus(self.search_id.clone()),
+            (true, true) => self.reveal_nav(),
+            (false, false) => Task::none(),
+        }
+    }
+
+    /// Pull the highlight back into range after the rows or tiles under it
+    /// have changed — a folder closed by the mouse, a tile unpinned, the
+    /// background reload landing. Clamped rather than dropped, so a Tab
+    /// pressed while the load was still in flight is not silently undone and
+    /// the next arrow key still moves one visible step; a zone with nothing
+    /// left in it hands the keyboard back to the search box.
+    fn renav(&mut self) -> Task<Message> {
+        let counts = self.counts();
+        let to = self.nav.and_then(|s| keynav::clamped(s, counts));
+        self.set_nav(to)
+    }
+
+    /// Scroll the app list so the highlighted row is showing.
+    fn reveal_nav(&mut self) -> Task<Message> {
+        let Some(spot) = self.nav.filter(|s| s.zone == Zone::List) else {
+            return Task::none();
+        };
+        let Some(stop) = self.list_stops().get(spot.index).copied() else {
+            return Task::none();
+        };
+        match keynav::reveal(stop.y, stop.h, self.list_offset, self.list_view) {
+            Some(y) => self.scroll_list(y),
+            None => Task::none(),
+        }
+    }
+
+    /// Enter on the highlight: the very message a click on it would send, so
+    /// there is one way to launch an app, open a folder or fire a rail
+    /// button however the user got there.
+    fn activate(&mut self) -> Task<Message> {
+        let Some(spot) = self.nav else {
+            return Task::none();
+        };
+        match spot.zone {
+            Zone::List => match self.list_stops().get(spot.index).map(|s| s.act) {
+                Some(ui::app_list::Act::App(i)) => self.update(Message::Launch(i)),
+                Some(ui::app_list::Act::Folder(i)) => self.update(Message::ToggleFolder(i)),
+                Some(ui::app_list::Act::Settings) => self.update(Message::OpenSettings),
+                None => Task::none(),
+            },
+            Zone::Tiles => {
+                let Some(at) = self.tile_stops().0.get(spot.index).copied() else {
+                    return Task::none();
+                };
+                if self.edit.on {
+                    return self.update(Message::TileClicked(at));
+                }
+                match self
+                    .config
+                    .groups
+                    .get(at.0)
+                    .and_then(|g| g.tiles.get(at.1))
+                    .map(|t| t.app.clone())
+                {
+                    Some(id) => self.update(Message::LaunchId(id)),
+                    None => Task::none(),
+                }
+            }
+            Zone::Rail => {
+                match ui::rail::items(&self.config.system_panel)
+                    .get(spot.index)
+                    .copied()
+                {
+                    Some(item) => {
+                        let msg = ui::rail::message(item, self.power_open);
+                        self.update(msg)
+                    }
+                    None => Task::none(),
+                }
+            }
+        }
+    }
+
+    /// One key the whole menu listens for, wherever the keyboard is.
+    fn on_key(&mut self, key: Key) -> Task<Message> {
+        match key {
+            Key::Escape => self.on_escape(),
+            Key::Tab | Key::ShiftTab => {
+                // A modal layer refuses the zone switch — and takes the
+                // keyboard back, because the press has already left the
+                // focused input read-only.
+                match nav_keys(self.context.is_some(), self.renaming.is_some()) {
+                    NavKeys::HoldRename => return text_input::focus(ui::tiles::rename_input_id()),
+                    NavKeys::HoldSearch => return text_input::focus(self.search_id.clone()),
+                    NavKeys::Move => {}
+                }
+                let to = keynav::tab(self.nav, key == Key::ShiftTab, self.counts());
+                if to.is_none() && self.nav.is_none() {
+                    // Nowhere to go — mid-search, every zone is empty. The
+                    // keyboard stays in the search box, but libcosmic's input
+                    // has already stopped taking text: with no `on_tab`
+                    // handler it marks itself read-only and does not consume
+                    // the press. Focusing it again is what clears that; left
+                    // alone the box took no letters and no backspace, and
+                    // every uncaptured letter after it was swallowed as a
+                    // first-letter jump.
+                    return text_input::focus(self.search_id.clone());
+                }
+                self.set_nav(to)
+            }
+            Key::Up | Key::Down | Key::Left | Key::Right => {
+                let dir = match key {
+                    Key::Up => keynav::Dir::Up,
+                    Key::Down => keynav::Dir::Down,
+                    Key::Left => keynav::Dir::Left,
+                    _ => keynav::Dir::Right,
+                };
+                let live = nav_keys_live(self.context.is_some(), self.renaming.is_some());
+                let Some(spot) = self.nav else {
+                    // Down with nothing typed is the other way out of the
+                    // search box, without reaching for Tab: it lands on the
+                    // first row of the list. With a query in the box the
+                    // arrows still walk the results, as they always have —
+                    // including behind a right-click menu, which is only
+                    // allowed to refuse the highlight, not the search.
+                    if live && self.query.trim().is_empty() && dir == keynav::Dir::Down {
+                        return self.set_nav(keynav::tab(None, false, self.counts()));
+                    }
+                    return self.search_arrow(dir);
+                };
+                // Only the highlight is gated. An arrow never trips the
+                // read-only trap, so nothing needs refocusing here.
+                if !live {
+                    return Task::none();
+                }
+                let counts = self.counts();
+                let (_, cells) = self.tile_stops();
+                let to = keynav::moved(spot, dir, counts, &cells);
+                self.set_nav(Some(to))
+            }
+        }
+    }
+
+    /// With no highlight the arrows belong to the search results, as they
+    /// always have; sideways means nothing there.
+    fn search_arrow(&mut self, dir: keynav::Dir) -> Task<Message> {
+        match dir {
+            keynav::Dir::Down => {
+                let total = crate::search::rank(&self.apps, &self.query).len() + self.found.len();
+                self.selected = (self.selected + 1).min(total.saturating_sub(1));
+            }
+            keynav::Dir::Up => self.selected = self.selected.saturating_sub(1),
+            keynav::Dir::Left | keynav::Dir::Right => {}
+        }
+        Task::none()
+    }
+
+    fn on_escape(&mut self) -> Task<Message> {
+        let layers = Layers {
+            highlight: self.nav.is_some(),
+            context: self.context.is_some(),
+            renaming: self.renaming.is_some(),
+            power: self.power_open,
+            mode_menu: self.mode_menu,
+            right_menu: self.right_menu,
+            letter_grid: self.letter_grid,
+            picked: self.edit.picked.is_some(),
+            query: !self.query.is_empty(),
+            editing: self.edit.on,
+        };
+        match escape_target(layers) {
+            Escape::DropHighlight => return self.set_nav(None),
+            Escape::Context => self.context = None,
+            Escape::CancelRename => self.renaming = None,
+            Escape::Menus => {
+                self.power_open = false;
+                self.mode_menu = false;
+                self.right_menu = false;
+            }
+            Escape::LetterGrid => self.letter_grid = false,
+            Escape::DropPick => self.edit.picked = None,
+            Escape::ClearSearch => {
+                self.query.clear();
+                self.selected = 0;
+                self.found.clear();
+                return text_input::focus(self.search_id.clone());
+            }
+            Escape::LeaveEdit => self.edit = ui::tiles::Edit::default(),
+            Escape::ClosePopup => return self.close_popup(),
+        }
+        Task::none()
     }
 
     fn width(&self) -> f32 {
@@ -744,6 +1106,9 @@ impl Application for App {
             avatar: Avatar::default(),
             renaming: None,
             found: Vec::new(),
+            nav: None,
+            list_offset: 0.0,
+            list_view: LIST_VIEWPORT,
         };
         let open = match mode {
             Mode::Panel => Task::none(),
@@ -849,7 +1214,11 @@ impl Application for App {
                 self.apps = apps;
                 self.usage_top = most_used;
                 self.config = config;
-                Task::none()
+                // Every index a highlight could hold came from the old,
+                // empty lists — but the reload lands a moment after the menu
+                // opens, so dropping the highlight outright would undo a Tab
+                // pressed in between.
+                self.renav()
             }
             Message::Launch(i) => {
                 let Some(app) = self.apps.get(i).cloned() else {
@@ -865,6 +1234,11 @@ impl Application for App {
             },
             Message::LetterGrid(open) => {
                 self.letter_grid = open;
+                // The grid replaces the list, so a highlight in it has
+                // nothing left to sit on.
+                if open {
+                    return self.set_nav(None);
+                }
                 Task::none()
             }
             Message::JumpTo(letter) => {
@@ -911,9 +1285,11 @@ impl Application for App {
             Message::SetListMode(mode) => {
                 self.mode_menu = false;
                 self.letter_grid = false;
+                // A different sort is a different list of rows.
+                let drop = self.set_nav(None);
                 let save = self.edit(move |c| c.list_mode = mode);
                 let top = self.scroll_list(0.0);
-                Task::batch([save, top])
+                Task::batch([drop, save, top])
             }
             Message::RightMenu(open) => {
                 self.right_menu = open;
@@ -924,7 +1300,9 @@ impl Application for App {
                 if side != RightSide::Tiles {
                     self.edit = ui::tiles::Edit::default();
                 }
-                self.edit(move |c| c.right_side = side)
+                // A different right column has different tiles, or none.
+                let drop = self.set_nav(None);
+                Task::batch([drop, self.edit(move |c| c.right_side = side)])
             }
             Message::AddFavourite(id) => {
                 let list = crate::favorites::with_added(&self.favs, &id);
@@ -938,7 +1316,9 @@ impl Application for App {
                 if generation == self.edit_gen {
                     self.config = *saved;
                 }
-                Task::none()
+                // The config just came back from disk, where the Settings
+                // window may have deleted the group the highlight was in.
+                self.renav()
             }
             Message::FavouritesSaved(list) => {
                 self.favs = list;
@@ -948,7 +1328,9 @@ impl Application for App {
                 if !self.open_folders.remove(&i) {
                     self.open_folders.insert(i);
                 }
-                Task::none()
+                // Closing a folder takes its rows out of the list under the
+                // highlight.
+                self.renav()
             }
             Message::PowerMenu(open) => {
                 self.power_open = open;
@@ -966,9 +1348,26 @@ impl Application for App {
                 })
             }
             Message::Query(q) => {
+                let was_searching = !self.query.trim().is_empty();
                 self.query = q;
                 self.selected = 0;
+                // Typing is the search box's; the highlight belongs to the
+                // browse layout the results have just replaced.
+                self.nav = None;
                 self.ask_launcher();
+                // Starting or clearing a search swaps the whole layout under
+                // the box: results take the list and tile columns together,
+                // so the input sits at a different place in the widget tree
+                // and iced builds it fresh there — keyboard focus stays with
+                // the state it left behind. That is why the box went dead
+                // after the first letter, and why Enter, which only the
+                // focused input reports, never launched anything.
+                if was_searching != !self.query.trim().is_empty() {
+                    return Task::batch([
+                        text_input::focus(self.search_id.clone()),
+                        text_input::move_cursor_to_end(self.search_id.clone()),
+                    ]);
+                }
                 Task::none()
             }
             Message::Launcher(reply) => match reply {
@@ -993,49 +1392,49 @@ impl Application for App {
                 crate::launcher::activate(id);
                 Task::none()
             }
-            Message::SearchKey(Key::Down) => {
-                let total = crate::search::rank(&self.apps, &self.query).len() + self.found.len();
-                self.selected = (self.selected + 1).min(total.saturating_sub(1));
-                Task::none()
-            }
-            Message::SearchKey(Key::Up) => {
-                self.selected = self.selected.saturating_sub(1);
-                Task::none()
-            }
-            Message::SearchKey(Key::Escape) => {
-                let layers = Layers {
-                    context: self.context.is_some(),
-                    renaming: self.renaming.is_some(),
-                    power: self.power_open,
-                    mode_menu: self.mode_menu,
-                    right_menu: self.right_menu,
-                    letter_grid: self.letter_grid,
-                    picked: self.edit.picked.is_some(),
-                    query: !self.query.is_empty(),
-                    editing: self.edit.on,
-                };
-                match escape_target(layers) {
-                    Escape::Context => self.context = None,
-                    Escape::CancelRename => self.renaming = None,
-                    Escape::Menus => {
-                        self.power_open = false;
-                        self.mode_menu = false;
-                        self.right_menu = false;
-                    }
-                    Escape::LetterGrid => self.letter_grid = false,
-                    Escape::DropPick => self.edit.picked = None,
-                    Escape::ClearSearch => {
-                        self.query.clear();
-                        self.selected = 0;
-                        self.found.clear();
-                        return text_input::focus(self.search_id.clone());
-                    }
-                    Escape::LeaveEdit => self.edit = ui::tiles::Edit::default(),
-                    Escape::ClosePopup => return self.close_popup(),
+            Message::KeyPress(key) => self.on_key(key),
+            Message::Letter(c) => {
+                // Only once the highlight has reached the list: while the
+                // search box has the keyboard a letter is still a letter.
+                if self.focus_in(Zone::List).is_none()
+                    || !nav_keys_live(self.context.is_some(), self.renaming.is_some())
+                {
+                    return Task::none();
                 }
+                let letter = crate::apps::letter(&c.to_string());
+                let lines = ui::app_list::plan(&self.list_view());
+                let Some(stop) = ui::app_list::stop_at_letter(&lines, letter) else {
+                    return Task::none();
+                };
+                let jump = self.update(Message::JumpTo(letter));
+                // The highlight goes with the list, so the next arrow key
+                // carries on from the section he asked for rather than
+                // scrolling straight back to where he was.
+                self.nav = Some(keynav::Spot {
+                    zone: Zone::List,
+                    index: stop,
+                });
+                jump
+            }
+            Message::ListScrolled { offset, view } => {
+                self.list_offset = offset;
+                self.list_view = view;
                 Task::none()
             }
             Message::Submit => {
+                // Enter on the highlight does what clicking it would —
+                // unless a right-click menu or a rename draft is on top of
+                // it, which owns the key.
+                if self.nav.is_some() {
+                    if !nav_keys_live(self.context.is_some(), self.renaming.is_some()) {
+                        return Task::none();
+                    }
+                    return self.activate();
+                }
+                // Nothing to launch with an empty box, whatever has focus.
+                if self.query.trim().is_empty() {
+                    return Task::none();
+                }
                 let hits = crate::search::rank(&self.apps, &self.query);
                 match pick(hits.len(), self.found.len(), self.selected) {
                     Some(Pick::App(n)) => self.update(Message::Launch(hits[n])),
@@ -1263,14 +1662,37 @@ impl Application for App {
         if self.popup.is_none() {
             return remote;
         }
-        let keys = cosmic::iced::event::listen_with(|event, _status, _id| match event {
+        let keys = cosmic::iced::event::listen_with(|event, status, _id| match event {
             cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
                 key: KeyCode::Named(named),
+                modifiers,
                 ..
             }) => match named {
-                Named::ArrowUp => Some(Message::SearchKey(Key::Up)),
-                Named::ArrowDown => Some(Message::SearchKey(Key::Down)),
-                Named::Escape => Some(Message::SearchKey(Key::Escape)),
+                Named::ArrowUp => Some(Message::KeyPress(Key::Up)),
+                Named::ArrowDown => Some(Message::KeyPress(Key::Down)),
+                // Taken whatever consumed them: with the keyboard still in
+                // the search box the input moves its cursor with these, and
+                // we ignore them unless a highlight is up.
+                Named::ArrowLeft => Some(Message::KeyPress(Key::Left)),
+                Named::ArrowRight => Some(Message::KeyPress(Key::Right)),
+                Named::Escape => Some(Message::KeyPress(Key::Escape)),
+                // The search input does not consume Tab — without an
+                // `on_tab` handler it only stops taking text — so the zone
+                // switch is ours to make either way.
+                Named::Tab => Some(Message::KeyPress(if modifiers.shift() {
+                    Key::ShiftTab
+                } else {
+                    Key::Tab
+                })),
+                // The search box submits for itself while it holds the
+                // keyboard focus; the arrow keys are picked up here instead,
+                // and iced hands a key to the focused widget only — so after
+                // arrowing into the list, Enter had nowhere to go and the
+                // highlighted row could not be launched. Taken here only when
+                // no widget consumed the press, so a launch never fires twice.
+                Named::Enter if status == cosmic::iced::event::Status::Ignored => {
+                    Some(Message::Submit)
+                }
                 _ => None,
             },
             // Ctrl+1..9 launches a pinned tile. Ctrl, because bare digits
@@ -1285,6 +1707,23 @@ impl Application for App {
                 .and_then(|d| d.to_digit(10))
                 .filter(|d| (1..=9).contains(d))
                 .map(|d| Message::TileNumber(d as usize)),
+            // A plain letter once the keyboard has left the search box: a
+            // jump to that letter's section. Only when nothing consumed the
+            // press, so typing into the box is untouched.
+            cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
+                key: KeyCode::Character(c),
+                modifiers,
+                ..
+            }) if !modifiers.control()
+                && !modifiers.alt()
+                && !modifiers.logo()
+                && status == cosmic::iced::event::Status::Ignored =>
+            {
+                c.chars()
+                    .next()
+                    .filter(|c| c.is_alphanumeric())
+                    .map(Message::Letter)
+            }
             _ => None,
         });
         let focus = cosmic::iced::event::listen_with(|event, _status, _id| match event {
@@ -1369,17 +1808,7 @@ impl Application for App {
                         let present: Vec<char> = sections.into_iter().map(|(c, _)| c).collect();
                         ui::app_list::letter_grid(&present)
                     } else {
-                        ui::app_list::view(ui::app_list::ListView {
-                            apps: &self.apps,
-                            most_used: &self.usage_top,
-                            recent: &self.recent,
-                            show_most_used: self.config.show_most_used,
-                            mode: self.config.list_mode,
-                            folders: &self.folders,
-                            loose: &self.loose,
-                            open_folders: &self.open_folders,
-                            list_id: self.list_id.clone(),
-                        })
+                        ui::app_list::view(self.list_view(), self.focus_in(Zone::List))
                     },
                 ])
                 .spacing(spacing.section)
@@ -1393,13 +1822,21 @@ impl Application for App {
                     recent: &self.recent,
                     menu_open: self.right_menu,
                     renaming: self.renaming.as_ref(),
+                    focus: self
+                        .focus_in(Zone::Tiles)
+                        .and_then(|n| self.tile_stops().0.get(n).copied()),
                 }),
             ])
             .spacing(COLUMN_GAP)
             .into()
         };
         let columns = row::with_children(vec![
-            ui::rail::view(self.power_open, &self.avatar, &self.config.system_panel),
+            ui::rail::view(
+                self.power_open,
+                &self.avatar,
+                &self.config.system_panel,
+                self.focus_in(Zone::Rail),
+            ),
             main,
         ])
         .spacing(COLUMN_GAP)
@@ -1445,6 +1882,7 @@ mod tests {
     #[test]
     fn escape_closes_the_topmost_thing_first() {
         let all = Layers {
+            highlight: false,
             context: true,
             renaming: true,
             power: true,
@@ -1493,6 +1931,60 @@ mod tests {
                 ..layers()
             }),
             Escape::ClearSearch
+        );
+    }
+
+    #[test]
+    fn a_refused_navigation_key_hands_the_keyboard_back() {
+        // Nothing on top: the key moves the highlight.
+        assert_eq!(nav_keys(false, false), NavKeys::Move);
+        // A rename draft is the one that must get the keyboard back, or Tab
+        // leaves it read-only with no way in but Escape, which discards it.
+        assert_eq!(nav_keys(false, true), NavKeys::HoldRename);
+        assert_eq!(nav_keys(true, true), NavKeys::HoldRename);
+        // A right-click menu with no draft open: back to the search box,
+        // which Tab has just left read-only too.
+        assert_eq!(nav_keys(true, false), NavKeys::HoldSearch);
+    }
+
+    #[test]
+    fn a_menu_or_a_rename_on_top_owns_the_navigation_keys() {
+        assert!(nav_keys_live(false, false));
+        // A right-click menu: Enter must act on what was right-clicked, not
+        // launch the row the highlight happens to be on behind it.
+        assert!(!nav_keys_live(true, false));
+        // A rename draft: Tab would blur the input and leave the draft
+        // untypable.
+        assert!(!nav_keys_live(false, true));
+        assert!(!nav_keys_live(true, true));
+    }
+
+    #[test]
+    fn escape_drops_the_highlight_before_anything_else() {
+        // The top rung: one press puts the keyboard back in the search box,
+        // whatever else is open behind it.
+        assert_eq!(
+            escape_target(Layers {
+                highlight: true,
+                context: true,
+                renaming: true,
+                power: true,
+                letter_grid: true,
+                picked: true,
+                query: true,
+                editing: true,
+                ..layers()
+            }),
+            Escape::DropHighlight
+        );
+        // And with nothing else open it still only drops the highlight —
+        // Escape never closes the menu while something is highlighted.
+        assert_eq!(
+            escape_target(Layers {
+                highlight: true,
+                ..layers()
+            }),
+            Escape::DropHighlight
         );
     }
 

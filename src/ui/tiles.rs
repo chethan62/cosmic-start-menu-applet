@@ -89,6 +89,8 @@ struct TileArgs<'a> {
     edit: Edit,
     /// The field and draft text while this tile's inline input is open.
     renaming: Option<(TileField, &'a str)>,
+    /// Whether the keyboard highlight is on this tile.
+    focus: bool,
 }
 
 fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
@@ -104,6 +106,7 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         show_name,
         edit,
         renaming,
+        focus,
     } = args;
     let glyph = icon(app.icon.as_cosmic_icon()).size(match size {
         TileSize::Small => ICON_SMALL,
@@ -146,7 +149,9 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         .into(),
         TileSize::Medium | TileSize::Wide => container(glyph).center(Length::Fill).into(),
     };
-    let class = if edit.picked == Some(at) {
+    let class = if edit.picked == Some(at) || focus {
+        // The same accent tint a highlighted list row wears, so one
+        // highlight reads the same wherever it is.
         selected_button()
     } else if edit.on {
         // An edge on every tile says "these move now" without a new colour.
@@ -254,6 +259,8 @@ pub struct RightView<'a> {
     pub menu_open: bool,
     /// A tile field mid-edit, with the text as typed so far.
     pub renaming: Option<&'a (TileRef, TileField, String)>,
+    /// The tile the keyboard highlight is on, if it is in this column.
+    pub focus: Option<TileRef>,
 }
 
 fn side_key(side: RightSide) -> &'static str {
@@ -355,6 +362,27 @@ fn app_grid<'a>(ids: &[String], apps: &'a [App], note: String) -> Element<'a, Me
     .into()
 }
 
+/// Every tile the keyboard can land on, in the order the column draws them:
+/// each group's installed tiles, group after group. The first half is the
+/// tile each stop refers to; the second is that group's sizes, which
+/// `keynav::tile_grid` packs into the cells on screen.
+pub fn keyboard_tiles(config: &Config, apps: &[App]) -> (Vec<TileRef>, Vec<Vec<TileSize>>) {
+    // Only tiles: the Favourites and Recent grids are their own thing and
+    // the keyboard skips the column entirely while one of them is up.
+    if config.right_side != RightSide::Tiles {
+        return (Vec::new(), Vec::new());
+    }
+    let installed: HashSet<&str> = apps.iter().map(|a| a.id.as_str()).collect();
+    let mut refs = Vec::new();
+    let mut groups = Vec::with_capacity(config.groups.len());
+    for g in 0..config.groups.len() {
+        let visible = config.visible_tiles(g, &installed);
+        groups.push(visible.iter().map(|(_, t)| t.size).collect());
+        refs.extend(visible.iter().map(|(ti, _)| (g, *ti)));
+    }
+    (refs, groups)
+}
+
 pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
     let RightView {
         config,
@@ -365,6 +393,7 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
         recent,
         menu_open,
         renaming,
+        focus,
     } = v;
     let cells = config.tile_cells();
     let width = Length::Fixed(column_width(spacing, cells));
@@ -426,6 +455,7 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
                     show_name: config.show_tile_names,
                     edit,
                     renaming: draft,
+                    focus: focus == Some((g, *ti)),
                 }))
                 .x(at.0)
                 .y(at.1)

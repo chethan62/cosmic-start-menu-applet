@@ -9,7 +9,7 @@ use crate::app::{Avatar, Message};
 use crate::config::{Slot, SystemPanel};
 use crate::fl;
 use crate::session::{self, Power};
-use crate::ui::{menu_card, quiet_button, row_radius, v_hairline, RAIL_WIDTH};
+use crate::ui::{menu_card, quiet_button, row_radius, selected_button, v_hairline, RAIL_WIDTH};
 
 const BUTTON: f32 = 40.0;
 /// Vertical rhythm between rail glyphs, and the pad at the rail's ends.
@@ -20,10 +20,54 @@ const RAIL_PAD: u16 = 12;
 /// marooned at the top of an empty strip.
 const AVATAR_GAP: f32 = 16.0;
 
-fn rail_button<'a>(icon_name: &'static str, label: String, msg: Message) -> Element<'a, Message> {
+/// A rail button, top to bottom in the order `view` draws them. The keyboard
+/// walks this list, so it is the list `view` itself is built from — the two
+/// cannot drift apart into a highlight that lands on the wrong glyph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Item {
+    Account,
+    Slot(Slot),
+    Settings,
+    Power,
+}
+
+pub fn items(panel: &SystemPanel) -> Vec<Item> {
+    let mut out = vec![Item::Account];
+    out.extend(
+        crate::config::SLOTS
+            .into_iter()
+            .filter(|&s| panel.shown(s))
+            .map(Item::Slot),
+    );
+    out.push(Item::Settings);
+    out.push(Item::Power);
+    out
+}
+
+/// What pressing a rail button does. Power is a toggle, so it needs to know
+/// whether its menu is already up.
+pub fn message(item: Item, power_open: bool) -> Message {
+    match item {
+        Item::Account => Message::OpenAccount,
+        Item::Slot(slot) => Message::OpenSlot(slot),
+        Item::Settings => Message::OpenSettingsApp,
+        Item::Power => Message::PowerMenu(!power_open),
+    }
+}
+
+fn rail_button<'a>(
+    icon_name: &'static str,
+    label: String,
+    msg: Message,
+    selected: bool,
+) -> Element<'a, Message> {
     tooltip(
         button::custom(container(icon::from_name(icon_name).size(18)).center(Length::Fill))
-            .class(quiet_button())
+            .class(if selected {
+                selected_button()
+            } else {
+                quiet_button()
+            })
             .padding(0)
             .width(Length::Fixed(BUTTON))
             .height(Length::Fixed(BUTTON))
@@ -69,7 +113,7 @@ fn avatar_radius(theme: &cosmic::Theme) -> f32 {
     }
 }
 
-fn avatar<'a>(a: &Avatar) -> Element<'a, Message> {
+fn avatar<'a>(a: &Avatar, selected: bool) -> Element<'a, Message> {
     let inner: Element<'a, Message> = match &a.image {
         Some(handle) => cosmic::widget::image(handle.clone())
             .content_fit(cosmic::iced::ContentFit::Cover)
@@ -99,7 +143,11 @@ fn avatar<'a>(a: &Avatar) -> Element<'a, Message> {
     // as a stuck selected state at the top of the rail.
     tooltip(
         button::custom(face)
-            .class(quiet_button())
+            .class(if selected {
+                selected_button()
+            } else {
+                quiet_button()
+            })
             .padding(0)
             .width(Length::Fixed(AVATAR))
             .height(Length::Fixed(AVATAR))
@@ -120,41 +168,53 @@ pub fn slot_face(slot: Slot) -> (&'static str, &'static str) {
     }
 }
 
-pub fn view<'a>(power_open: bool, account: &Avatar, panel: &SystemPanel) -> Element<'a, Message> {
-    let power = rail_button(
-        "system-shutdown-symbolic",
-        fl!("power"),
-        Message::PowerMenu(!power_open),
-    );
-    // Anchored at the button's bottom-right; popover flips it upward when it
-    // would run off the bottom of the popup, which at the rail's foot it does.
-    let mut power = popover(power)
-        .position(popover::Position::Point(Point::new(BUTTON + 4.0, BUTTON)))
-        .on_close(Message::PowerMenu(false));
-    if power_open {
-        power = power.popup(power_menu());
-    }
-
+pub fn view<'a>(
+    power_open: bool,
+    account: &Avatar,
+    panel: &SystemPanel,
+    focus: Option<usize>,
+) -> Element<'a, Message> {
     // Avatar, then the default-app cluster right under it, then all the
-    // slack, then Settings and Power as one bottom cluster.
-    let mut col = column::with_capacity(8)
-        .push(avatar(account))
-        .push(Space::new().height(Length::Fixed(AVATAR_GAP - f32::from(RHYTHM))));
-    for slot in crate::config::SLOTS {
-        if panel.shown(slot) {
-            let (glyph, key) = slot_face(slot);
-            col = col.push(rail_button(glyph, fl!(key), Message::OpenSlot(slot)));
-        }
+    // slack, then Settings and Power as one bottom cluster. Built by walking
+    // `items`, so the keyboard's n'th rail button is this one.
+    let mut col = column::with_capacity(8);
+    for (n, item) in items(panel).into_iter().enumerate() {
+        let on = Some(n) == focus;
+        let msg = message(item, power_open);
+        col = match item {
+            Item::Account => col
+                .push(avatar(account, on))
+                .push(Space::new().height(Length::Fixed(AVATAR_GAP - f32::from(RHYTHM)))),
+            Item::Slot(slot) => {
+                let (glyph, key) = slot_face(slot);
+                col.push(rail_button(glyph, fl!(key), msg, on))
+            }
+            Item::Settings => col
+                // All the slack above the bottom cluster.
+                .push(Space::new().height(Length::Fill))
+                .push(rail_button(
+                    "preferences-system-symbolic",
+                    fl!("rail-settings"),
+                    msg,
+                    on,
+                )),
+            // Power is hard-anchored at the foot of the rail. Its menu is
+            // anchored at the button's bottom-right; popover flips it upward
+            // when it would run off the bottom of the popup, which at the
+            // rail's foot it does.
+            Item::Power => {
+                let power = rail_button("system-shutdown-symbolic", fl!("power"), msg, on);
+                let mut power = popover(power)
+                    .position(popover::Position::Point(Point::new(BUTTON + 4.0, BUTTON)))
+                    .on_close(Message::PowerMenu(false));
+                if power_open {
+                    power = power.popup(power_menu());
+                }
+                col.push(power)
+            }
+        };
     }
     let col = col
-        .push(Space::new().height(Length::Fill))
-        .push(rail_button(
-            "preferences-system-symbolic",
-            fl!("rail-settings"),
-            Message::OpenSettingsApp,
-        ))
-        // Power is hard-anchored at the foot of the rail.
-        .push(power)
         .spacing(RHYTHM)
         .align_x(Alignment::Center)
         .width(Length::Fill)
@@ -171,4 +231,53 @@ pub fn view<'a>(power_open: bool, account: &Avatar, panel: &SystemPanel) -> Elem
     ])
     .height(Length::Fill)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_rail_lists_account_shown_slots_settings_and_power() {
+        let mut panel = SystemPanel::default();
+        for slot in crate::config::SLOTS {
+            panel.set_shown(slot, true);
+        }
+        let all = items(&panel);
+        assert_eq!(all.first(), Some(&Item::Account));
+        assert_eq!(all.last(), Some(&Item::Power));
+        assert_eq!(all[all.len() - 2], Item::Settings);
+        assert_eq!(all.len(), crate::config::SLOTS.len() + 3);
+        // A hidden slot leaves the list, so the keyboard cannot land on a
+        // button that is not drawn.
+        panel.set_shown(Slot::Terminal, false);
+        let fewer = items(&panel);
+        assert_eq!(fewer.len(), all.len() - 1);
+        assert!(!fewer.contains(&Item::Slot(Slot::Terminal)));
+    }
+
+    #[test]
+    fn a_rail_item_reuses_the_action_its_button_already_had() {
+        assert!(matches!(
+            message(Item::Account, false),
+            Message::OpenAccount
+        ));
+        assert!(matches!(
+            message(Item::Settings, false),
+            Message::OpenSettingsApp
+        ));
+        assert!(matches!(
+            message(Item::Slot(Slot::Files), false),
+            Message::OpenSlot(Slot::Files)
+        ));
+        // Power toggles its own menu, as the button always did.
+        assert!(matches!(
+            message(Item::Power, false),
+            Message::PowerMenu(true)
+        ));
+        assert!(matches!(
+            message(Item::Power, true),
+            Message::PowerMenu(false)
+        ));
+    }
 }
