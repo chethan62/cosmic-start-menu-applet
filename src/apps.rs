@@ -21,6 +21,10 @@ pub struct App {
     pub actions: Vec<Action>,
     /// Desktop-entry `Categories`, e.g. `["Graphics", "3DGraphics"]`.
     pub categories: Vec<String>,
+    /// The dominant brand colour of `icon`, for a solid tile fill. Filled by
+    /// the background load for tiled apps only, off the render path; `None`
+    /// means a flat/monochrome icon with no brand hue, or not computed.
+    pub brand: Option<[u8; 3]>,
 }
 
 impl Default for App {
@@ -35,6 +39,7 @@ impl Default for App {
             terminal: false,
             actions: Vec::new(),
             categories: Vec::new(),
+            brand: None,
         }
     }
 }
@@ -139,6 +144,7 @@ fn from_entry(de: &fde::DesktopEntry, locales: &[String]) -> App {
             .filter(|c| !c.is_empty())
             .map(str::to_owned)
             .collect(),
+        brand: None,
     }
 }
 

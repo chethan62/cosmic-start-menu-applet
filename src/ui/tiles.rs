@@ -84,6 +84,13 @@ struct TileArgs<'a> {
     color: Option<cosmic::iced::Color>,
     /// A picture behind the tile, when its file exists.
     image: Option<&'a str>,
+    /// The icon's brand colour, for an auto fill when enabled and the tile
+    /// sets no colour or picture of its own.
+    brand: Option<cosmic::iced::Color>,
+    /// The tile radius the picture is masked to, from the theme.
+    radius: f32,
+    /// Whether auto brand fills are on.
+    from_icon: bool,
     /// Whether Medium and Wide tiles draw their name.
     show_name: bool,
     edit: Edit,
@@ -91,6 +98,32 @@ struct TileArgs<'a> {
     renaming: Option<(TileField, &'a str)>,
     /// Whether the keyboard highlight is on this tile.
     focus: bool,
+}
+
+/// Which source paints a tile, in precedence order: a picture wins over
+/// everything, then the tile's own colour, then the icon's brand colour when
+/// that is turned on and the icon has one, and otherwise the theme's finish.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fill {
+    Image,
+    /// The tile's explicit `color`.
+    Explicit,
+    /// The icon's brand colour.
+    Auto,
+    /// The theme's finish.
+    Finish,
+}
+
+pub fn tile_fill(has_image: bool, has_color: bool, has_brand: bool, from_icon: bool) -> Fill {
+    if has_image {
+        Fill::Image
+    } else if has_color {
+        Fill::Explicit
+    } else if from_icon && has_brand {
+        Fill::Auto
+    } else {
+        Fill::Finish
+    }
 }
 
 fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
@@ -103,6 +136,9 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         finish,
         color,
         image,
+        brand,
+        radius,
+        from_icon,
         show_name,
         edit,
         renaming,
@@ -149,6 +185,7 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         .into(),
         TileSize::Medium | TileSize::Wide => container(glyph).center(Length::Fill).into(),
     };
+    let fill = tile_fill(image.is_some(), color.is_some(), brand.is_some(), from_icon);
     let class = if edit.picked == Some(at) || focus {
         // The same accent tint a highlighted list row wears, so one
         // highlight reads the same wherever it is.
@@ -156,12 +193,13 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
     } else if edit.on {
         // An edge on every tile says "these move now" without a new colour.
         tile_button_class(TileFinish::Outline)
-    } else if image.is_some() {
-        image_tile_class()
-    } else if let Some(fill) = color {
-        colored_tile_class(fill)
     } else {
-        tile_button_class(finish)
+        match fill {
+            Fill::Image => image_tile_class(),
+            Fill::Explicit => colored_tile_class(color.unwrap()),
+            Fill::Auto => colored_tile_class(brand.unwrap()),
+            Fill::Finish => tile_button_class(finish),
+        }
     };
     // Clipped to the tile: a square-canvas icon (OpenTTD's diamond, say)
     // otherwise draws past the fill and makes the grid look ragged.
@@ -179,18 +217,18 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         } else {
             Message::LaunchId(app.id.clone())
         });
-    // The picture sits in a layer under the button, cropped to the tile.
+    // The picture sits in a layer under the button, masked to the tile's
+    // rounded corners: a rectangular `clip` left its square corners poking
+    // past the radius. A decode failure falls back to the raw path, which at
+    // least shows something rather than an empty tile.
     let button: Element<'a, Message> = match image {
         Some(path) => {
-            let picture = container(
-                cosmic::widget::image(cosmic::widget::image::Handle::from_path(path))
-                    .content_fit(cosmic::iced::ContentFit::Cover)
-                    .width(Length::Fixed(w))
-                    .height(Length::Fixed(h)),
-            )
-            .clip(true)
-            .width(Length::Fixed(w))
-            .height(Length::Fixed(h));
+            let handle = crate::tileimage::masked(path, w, h, radius)
+                .unwrap_or_else(|| cosmic::widget::image::Handle::from_path(path));
+            let picture = cosmic::widget::image(handle)
+                .content_fit(cosmic::iced::ContentFit::Cover)
+                .width(Length::Fixed(w))
+                .height(Length::Fixed(h));
             stack(vec![picture.into(), button.into()]).into()
         }
         None => button.into(),
@@ -261,6 +299,8 @@ pub struct RightView<'a> {
     pub renaming: Option<&'a (TileRef, TileField, String)>,
     /// The tile the keyboard highlight is on, if it is in this column.
     pub focus: Option<TileRef>,
+    /// The theme's tile radius, for masking tile pictures to it.
+    pub radius: f32,
 }
 
 fn side_key(side: RightSide) -> &'static str {
@@ -394,6 +434,7 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
         menu_open,
         renaming,
         focus,
+        radius,
     } = v;
     let cells = config.tile_cells();
     let width = Length::Fixed(column_width(spacing, cells));
@@ -452,6 +493,15 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
                     finish: config.finish,
                     color: t.color.as_deref().and_then(parse_hex),
                     image: picture,
+                    brand: config
+                        .tile_colors_from_icon
+                        .then(|| {
+                            app.brand
+                                .map(|[r, g, b]| cosmic::iced::Color::from_rgb8(r, g, b))
+                        })
+                        .flatten(),
+                    radius,
+                    from_icon: config.tile_colors_from_icon,
                     show_name: config.show_tile_names,
                     edit,
                     renaming: draft,
@@ -539,4 +589,36 @@ fn tile_scroll<'a>(
     ])))
     .height(Length::Fill)
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{tile_fill, Fill};
+
+    #[test]
+    fn a_picture_wins_over_everything() {
+        // image > color > auto > finish, whatever else is set.
+        assert_eq!(tile_fill(true, true, true, true), Fill::Image);
+        assert_eq!(tile_fill(true, false, false, false), Fill::Image);
+    }
+
+    #[test]
+    fn an_explicit_colour_beats_the_auto_brand() {
+        assert_eq!(tile_fill(false, true, true, true), Fill::Explicit);
+        assert_eq!(tile_fill(false, true, false, false), Fill::Explicit);
+    }
+
+    #[test]
+    fn the_brand_colour_fills_a_plain_tile_only_when_turned_on() {
+        // On, with a brand: auto. Off: the finish, even with a brand.
+        assert_eq!(tile_fill(false, false, true, true), Fill::Auto);
+        assert_eq!(tile_fill(false, false, true, false), Fill::Finish);
+    }
+
+    #[test]
+    fn a_monochrome_icon_falls_back_to_the_finish() {
+        // Auto on but the icon yielded no brand colour.
+        assert_eq!(tile_fill(false, false, false, true), Fill::Finish);
+        assert_eq!(tile_fill(false, false, false, false), Fill::Finish);
+    }
 }

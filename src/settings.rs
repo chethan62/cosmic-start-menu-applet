@@ -56,6 +56,7 @@ pub enum Message {
     SetDefaultApp(Slot, usize),
     ShowSlot(Slot, bool),
     SetTileNames(bool),
+    SetTileColors(bool),
     SetListMode(ListMode),
     SetRightSide(RightSide),
     AskReset(bool),
@@ -164,6 +165,9 @@ impl Application for Settings {
             }
             Message::SetTileNames(on) => {
                 self.change(|c| c.show_tile_names = on);
+            }
+            Message::SetTileColors(on) => {
+                self.change(|c| c.tile_colors_from_icon = on);
             }
             Message::SetListMode(mode) => {
                 self.change(|c| c.list_mode = mode);
@@ -384,6 +388,11 @@ impl Application for Settings {
             .push(text::body(fl!("settings-tile-names")).width(Length::Fill))
             .push(toggler(self.config.show_tile_names).on_toggle(Message::SetTileNames));
 
+        let tile_colors = row::with_capacity(2)
+            .align_y(Alignment::Center)
+            .push(text::body(fl!("settings-tile-colors")).width(Length::Fill))
+            .push(toggler(self.config.tile_colors_from_icon).on_toggle(Message::SetTileColors));
+
         let reset: Element<'_, Message> = if self.confirm_reset {
             row::with_capacity(3)
                 .spacing(space)
@@ -428,6 +437,7 @@ impl Application for Settings {
             .push(divider::horizontal::default())
             .push(most_used)
             .push(tile_names)
+            .push(tile_colors)
             .push(divider::horizontal::default())
             .push(reset)
             .push(status)

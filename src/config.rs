@@ -231,6 +231,9 @@ pub struct Config {
     pub locked: bool,
     /// Whether Medium and Wide tiles draw their name along the bottom.
     pub show_tile_names: bool,
+    /// Whether a tile with no explicit colour or picture is filled with the
+    /// dominant brand colour of its app's icon, like a Windows live tile.
+    pub tile_colors_from_icon: bool,
     pub list_mode: ListMode,
     pub right_side: RightSide,
     /// Medium tiles across a group: 2 or 3.
@@ -251,6 +254,7 @@ impl Default for Config {
             show_most_used: true,
             locked: false,
             show_tile_names: true,
+            tile_colors_from_icon: true,
             list_mode: ListMode::Az,
             right_side: RightSide::Tiles,
             tile_columns: 3,
@@ -288,6 +292,8 @@ const HEADER: &str = "\
 # of the browser / files / terminal / task-manager shortcuts are shown.
 # A tile's `color` is `#rrggbb` and `image` a picture's path; either wins
 # over `finish`. `show_tile_names` hides tile captions when false.
+# `tile_colors_from_icon` fills a tile with its icon's brand colour unless
+# the tile sets its own `color` or `image`; off falls back to `finish`.
 ";
 
 /// The dock's favourites file is a RON list of strings. Pull the quoted

@@ -112,6 +112,7 @@ ctx-image-change = Change tile picture…
 ctx-image-remove = Remove tile picture
 tile-image = Path to a picture
 settings-tile-names = Show names on tiles
+settings-tile-colors = Colour tiles from icon
 rail-browser = Web browser
 rail-terminal = Terminal
 rail-task-manager = Task manager

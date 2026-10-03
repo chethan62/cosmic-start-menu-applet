@@ -667,6 +667,31 @@ fn load(generation: u64) -> Loaded {
     // second time, doubling the cost of every open.
     let installed: Vec<String> = apps.iter().map(|a| a.id.clone()).collect();
     let config = Config::load_with(&installed);
+    // The brand colour behind each tile, derived from the app's icon. Only
+    // the apps a tile points at need one — favourites and recent draw their
+    // icons on no fill — so the rasterising is a dozen icons, not the whole
+    // index, and `brand` caches by file across reloads.
+    let mut apps = apps;
+    if config.tile_colors_from_icon {
+        let tiled: std::collections::HashSet<String> = config
+            .groups
+            .iter()
+            .flat_map(|g| g.tiles.iter().map(|t| t.app.clone()))
+            .collect();
+        for app in apps.iter_mut().filter(|a| tiled.contains(&a.id)) {
+            app.brand = crate::brand::of_icon(&app.icon);
+        }
+    }
+    finish_load(generation, apps, most_used, config, recent)
+}
+
+fn finish_load(
+    generation: u64,
+    apps: Vec<AppEntry>,
+    most_used: Vec<String>,
+    config: Config,
+    recent: Vec<String>,
+) -> Loaded {
     let (folders, loose) = crate::folders::load(&apps);
     Loaded {
         generation,
@@ -2621,6 +2646,7 @@ impl Application for App {
                     focus: self
                         .focus_in(Zone::Tiles)
                         .and_then(|n| self.tile_stops().0.get(n).copied()),
+                    radius: ui::tile_radius(self.core.system_theme()),
                 }),
             ])
             .spacing(COLUMN_GAP)

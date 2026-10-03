@@ -47,6 +47,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+# Rasterise an app's icon to sample its dominant brand colour for a tile
+# fill (src/brand.rs). resvg is already in the tree via libcosmic; usvg and
+# tiny-skia come through its own re-exports, so no versions can drift and no
+# new image stack is added.
+resvg = "0.45"
 
 [dev-dependencies]
 tempfile = "3"

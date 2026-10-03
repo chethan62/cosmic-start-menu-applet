@@ -2,6 +2,7 @@
 
 mod app;
 mod apps;
+mod brand;
 mod config;
 mod fade;
 mod favorites;
@@ -20,6 +21,7 @@ mod settings;
 mod shortcut;
 mod single_instance;
 mod tile_layout;
+mod tileimage;
 mod ui;
 mod usage;
 
