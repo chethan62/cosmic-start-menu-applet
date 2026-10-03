@@ -3,6 +3,7 @@
 mod app;
 mod apps;
 mod config;
+mod fade;
 mod favorites;
 mod folders;
 mod i18n;
@@ -10,6 +11,7 @@ mod instance;
 mod keynav;
 mod launch;
 mod launcher;
+mod motion;
 mod process;
 mod remote;
 mod search;

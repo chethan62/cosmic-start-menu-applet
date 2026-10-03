@@ -30,12 +30,15 @@ pub fn window_settings() -> cosmic::app::Settings {
 /// the keyboard outright: asked for on demand, COSMIC left focus where it
 /// was. A full-screen transparent surface catching click-away was tried and
 /// dropped: COSMIC blurred the whole screen behind it.
-pub fn surface(id: Id, width: f32, position: MenuPosition) -> Task<Message> {
+///
+/// `offset` places the card that many pixels short of its resting place,
+/// towards its anchored edge — where an animated open starts from.
+pub fn surface(id: Id, width: f32, position: MenuPosition, offset: i32) -> Task<Message> {
     use cosmic::iced::platform_specific::shell::commands::layer_surface::{
         get_layer_surface, Anchor, KeyboardInteractivity, Layer,
     };
     use cosmic::iced::runtime::platform_specific::wayland::layer_surface::{
-        IcedMargin, IcedOutput, SctkLayerSurfaceSettings,
+        IcedOutput, SctkLayerSurfaceSettings,
     };
     get_layer_surface(SctkLayerSurfaceSettings {
         id,
@@ -50,28 +53,64 @@ pub fn surface(id: Id, width: f32, position: MenuPosition) -> Task<Message> {
         },
         output: IcedOutput::Active,
         namespace: "start-menu".into(),
-        margin: IcedMargin {
-            top: if position == MenuPosition::Top {
-                EDGE
-            } else {
-                0
-            },
-            right: 0,
-            bottom: if position == MenuPosition::Top {
-                0
-            } else {
-                EDGE
-            },
-            left: if position == MenuPosition::Corner {
-                EDGE
-            } else {
-                0
-            },
-        },
+        margin: margin(position, offset),
         size: Some((Some(width as u32), Some(POPUP_HEIGHT as u32))),
         exclusive_zone: 0,
         size_limits: popup_limits(width),
     })
+}
+
+/// The surface's margins with the card `offset` pixels short of rest.
+///
+/// The slide moves the gap on the anchored edge only: a bottom menu rises
+/// out of the panel and a top menu drops from the screen's top, each
+/// travelling away from the edge it hangs on.
+fn margin(
+    position: MenuPosition,
+    offset: i32,
+) -> cosmic::iced::runtime::platform_specific::wayland::layer_surface::IcedMargin {
+    use cosmic::iced::runtime::platform_specific::wayland::layer_surface::IcedMargin;
+    let top = position == MenuPosition::Top;
+    IcedMargin {
+        top: if top { EDGE - offset } else { 0 },
+        right: 0,
+        bottom: if top { 0 } else { EDGE - offset },
+        left: if position == MenuPosition::Corner {
+            EDGE
+        } else {
+            0
+        },
+    }
+}
+
+/// Move the open surface along its slide. A margin change is applied by the
+/// compositor without a redraw or a reconfigure, so it is cheap per frame.
+pub fn slide(id: Id, position: MenuPosition, offset: i32) -> Task<Message> {
+    let m = margin(position, offset);
+    cosmic::iced::platform_specific::shell::commands::layer_surface::set_margin(
+        id, m.top, m.right, m.bottom, m.left,
+    )
+}
+
+/// Give up the keyboard, for a menu fading out. The protocol's way to say
+/// "not interested in keys"; cosmic-comp still leaves an existing focus where
+/// it is until the surface is destroyed (see `App::close_popup`), so this is
+/// the request, and the fading menu ignoring keys is the guarantee.
+pub fn drop_keyboard(id: Id) -> Task<Message> {
+    use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+        set_keyboard_interactivity, KeyboardInteractivity,
+    };
+    set_keyboard_interactivity(id, KeyboardInteractivity::None)
+}
+
+/// Take the keyboard back outright, as a new surface does, for a fade-out
+/// turned round by a press. [`release_keyboard`] hands it back to on-demand
+/// once focus has arrived.
+pub fn grab_keyboard(id: Id) -> Task<Message> {
+    use cosmic::iced::platform_specific::shell::commands::layer_surface::{
+        set_keyboard_interactivity, KeyboardInteractivity,
+    };
+    set_keyboard_interactivity(id, KeyboardInteractivity::Exclusive)
 }
 
 /// Gap between the shortcut menu and the screen edge / panel.

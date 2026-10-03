@@ -40,6 +40,13 @@ fluent-bundle = "0.16"
 unic-langid = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The open/close fade (src/fade.rs): `wp_alpha_modifier_v1` on the menu's own
+# surface, through a guest connection on libcosmic's display. All three are
+# already in the tree via libcosmic; `client_system` is what lets a second
+# connection share an existing `wl_display`.
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 
 [dev-dependencies]
 tempfile = "3"

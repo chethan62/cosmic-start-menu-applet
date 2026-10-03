@@ -90,6 +90,50 @@ fn pick(apps: usize, found: usize, selected: usize) -> Option<Pick> {
 /// How long the menu waits after losing the keyboard before closing.
 const FOCUS_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// How long a new surface stays hidden waiting for the fade to take hold of
+/// it before the menu is shown anyway, without one. Normally the hold comes
+/// within a frame or two; this only bounds the case where it never does.
+const REVEAL_DEADLINE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// How long an animation step waits for its frame callback before running
+/// anyway. A surface the compositor is not repainting gets no callbacks, and
+/// a fade-out that waited on one forever would never be destroyed.
+const FRAME_FALLBACK: std::time::Duration = std::time::Duration::from_millis(33);
+
+/// The fade's link to the compositor, made on the first open.
+enum FaderState {
+    /// No surface has been opened yet.
+    Untried,
+    // Boxed: one per process, and the other states carry nothing.
+    Ready(Box<crate::fade::Fader>),
+    /// The compositor does not offer the alpha modifier, or the surface
+    /// handle could not be read: every open and close is instant, as it was
+    /// before the fade existed.
+    Unavailable,
+}
+
+/// The open or close animation that is running, on the open surface or on
+/// one fading out.
+#[derive(Debug, Clone, Copy)]
+struct Fade {
+    surface: Id,
+    motion: crate::motion::Motion,
+    /// When the last step ran. `None` until the clock starts — see
+    /// `fade_step`.
+    last: Option<std::time::Instant>,
+    /// The offset last sent, so the margin is only touched when it moves.
+    offset: i32,
+    /// Whether this opening has asked for its frost yet.
+    frosted: bool,
+}
+
+impl Fade {
+    /// An opening that has finished, or the motion is not an opening at all.
+    fn landed(fade: Option<Self>) -> bool {
+        fade.is_none_or(|f| f.motion.phase() == crate::motion::Phase::Closing)
+    }
+}
+
 /// How long after closing itself for losing the keyboard the menu ignores a
 /// toggle.
 ///
@@ -210,12 +254,15 @@ const OPEN_GUARD: std::time::Duration = std::time::Duration::from_millis(1500);
 /// unfocused — and an unbounded guard then ignored every press after it, so
 /// a visible menu could not be closed at all. After the window the press
 /// goes through, whatever the surface did.
+///
+/// `seen` is [`App::seen`]: the keyboard has arrived and the opening fade has
+/// landed.
 fn ignores_toggle(
     opened_at: Option<std::time::Instant>,
-    had_focus: bool,
+    seen: bool,
     now: std::time::Instant,
 ) -> bool {
-    !had_focus && opened_at.is_some_and(|at| now.duration_since(at) < OPEN_GUARD)
+    !seen && opened_at.is_some_and(|at| now.duration_since(at) < OPEN_GUARD)
 }
 
 /// What to do with a background reload when it lands.
@@ -278,6 +325,21 @@ fn focus_loss_closes(popup_open: bool, had_focus: bool, losses: u64, loss: u64) 
 pub struct App {
     core: Core,
     mode: Mode,
+    fader: FaderState,
+    /// Whether the open surface draws its content. False from asking for the
+    /// surface until the fade has hold of it, or has given up on it: the
+    /// first frame of a new surface is drawn empty, so it is never seen
+    /// before the fade can hide it — and never seen at all when it comes out
+    /// sheared, as the first frame at a fractional scale sometimes did.
+    revealed: bool,
+    /// A surface fading out after a close. The menu counts as closed while it
+    /// fades — a press turns the fade round instead of opening a second
+    /// surface — and the surface is destroyed when the fade ends.
+    closing: Option<Id>,
+    fade: Option<Fade>,
+    /// Bumped on every animation step: a frame callback or fallback tick
+    /// carrying any other number belongs to a step already taken.
+    fade_serial: u64,
     /// Whether the menu has had the keyboard since it last opened. The
     /// surface reports losing focus once before it first gains it, which is
     /// not a click away; and a menu that has never held the keyboard has not
@@ -451,11 +513,24 @@ pub enum Key {
 #[derive(Debug, Clone)]
 pub enum Message {
     TogglePopup,
-    /// The shortcut menu got the keyboard: now the search box can take it.
-    /// Focusing it at open does nothing, the surface does not exist yet.
-    Focused,
-    /// The shortcut menu lost the keyboard, e.g. to a click on a window.
-    Unfocused,
+    /// A surface got the keyboard: now the search box can take it. Focusing
+    /// it at open does nothing, the surface does not exist yet.
+    ///
+    /// Tagged with the surface, as is `Unfocused`: a menu fading out loses
+    /// the keyboard too, and reopened inside `FOCUS_GRACE` that loss used to
+    /// be taken for the new surface's and closed it.
+    Focused(Id),
+    /// A surface lost the keyboard, e.g. to a click on a window.
+    Unfocused(Id),
+    /// libcosmic has made a surface: its handles can be read now.
+    SurfaceOpened(Id),
+    /// A surface's display and `wl_surface`, for the fade to take hold of.
+    FadeHandles(Id, Option<crate::fade::Handles>),
+    /// Show a surface the fade never got hold of, without a fade.
+    RevealDeadline(Id),
+    /// Time for the next animation step, from a frame callback or the
+    /// fallback timer. The number is the step it was asked for by.
+    FadeFrame(u64),
     /// `FOCUS_GRACE` after an `Unfocused`: close if the keyboard has not
     /// come back since. The number is the `focus_losses` count it belongs to.
     FocusGone(u64),
@@ -530,6 +605,35 @@ pub enum Message {
     OpenSlot(Slot),
     OpenSettingsApp,
     OpenAccount,
+}
+
+impl Message {
+    /// Whether this came from someone using the menu — a key, a click, a
+    /// scroll — rather than from the process's own machinery.
+    ///
+    /// Listed the other way round, as the machinery, so that a variant added
+    /// later counts as input by default: a surface fading out ignores input
+    /// (see `update`), and wrongly ignoring a new kind of click there costs
+    /// nothing, where wrongly acting on one could change a menu mid-fade.
+    fn is_input(&self) -> bool {
+        !matches!(
+            self,
+            Message::TogglePopup
+                | Message::Focused(_)
+                | Message::Unfocused(_)
+                | Message::FocusGone(_)
+                | Message::SurfaceOpened(_)
+                | Message::FadeHandles(..)
+                | Message::RevealDeadline(_)
+                | Message::FadeFrame(_)
+                | Message::Launcher(_)
+                | Message::PopupClosed(_)
+                | Message::Loaded(_)
+                | Message::ShowError(_)
+                | Message::ConfigSaved(..)
+                | Message::FavouritesSaved(_)
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -685,6 +789,10 @@ impl App {
     /// Show the menu: a popup off the panel button, or in shortcut mode a
     /// layer surface the compositor gives the keyboard to.
     fn open(&mut self) -> Task<Message> {
+        // A press while a surface is still fading out turns that fade round
+        // instead (see `reverse_close`), so a new surface is only ever asked
+        // for when no surface exists — which the stash below relies on.
+        debug_assert!(self.closing.is_none());
         self.closed_by_focus = None;
         self.power_open = false;
         self.error = None;
@@ -694,10 +802,11 @@ impl App {
         self.nav = None;
         // A reload held back while the menu was last open goes in now, before
         // the surface is asked for, so this open draws it from its first
-        // frame. Applied here rather than at close: the closing surface can
-        // still be drawn from the update that destroys it, and here there is
-        // no surface at all to paint, focus or scroll. Every close leads to
-        // this open, whichever way the menu went away.
+        // frame. Applied here rather than at close: a closing surface fades
+        // out showing what it showed, and here there is no surface at all to
+        // paint, focus or scroll — a press during the fade-out reverses it
+        // without coming through here. Every close leads to this open,
+        // whichever way the menu went away.
         //
         // Its config is not applied. It was read before any edit made while
         // that menu was open, and the peek just below re-reads the file — the
@@ -716,23 +825,47 @@ impl App {
         // the process is resident now, so a value left over from the last
         // open would let a double press close a menu that is still mapping.
         self.had_focus = false;
+        // A focus-loss check scheduled for an earlier surface is not about
+        // this one.
+        self.focus_losses = self.focus_losses.wrapping_add(1);
         self.opened_at = Some(std::time::Instant::now());
         tracing::debug!("menu opening");
+        // Hidden until the fade has hold of the surface, then faded up from
+        // nothing while rising into place. Once the fade is known not to
+        // work, the menu is shown at once at rest, as it always was.
+        let animated = !matches!(self.fader, FaderState::Unavailable);
+        self.revealed = !animated;
+        self.fade = None;
+        let offset = if animated { crate::motion::SLIDE_PX } else { 0 };
         // One surface kind for both ways in. As a panel popup the menu could
         // not be closed by clicking the button again without a race, could
         // not take the keyboard unless a click handed it over, and a second
         // menu could open beside it from the shortcut. A layer surface is
         // focusable, dismissable and the only menu there is.
-        let popup = crate::shortcut::surface(id, self.width(), self.config.menu_position);
+        let popup = crate::shortcut::surface(id, self.width(), self.config.menu_position, offset);
 
         let load = self.reload();
 
         // Focused straight away so typing searches, as in Windows.
         let focus = text_input::focus(self.search_id.clone());
 
-        // Blur first: the request has to be stashed before the surface is
-        // created for `get_layer_surface` to install it on the first commit.
-        Task::batch([self.blur(), popup, load, focus])
+        let deadline = if animated {
+            Task::perform(tokio::time::sleep(REVEAL_DEADLINE), move |()| {
+                cosmic::action::app(Message::RevealDeadline(id))
+            })
+        } else {
+            Task::none()
+        };
+
+        // Without a fade the frost is asked for now, ahead of the surface, so
+        // `get_layer_surface` installs it on the first commit. With one it
+        // waits for the content: see `blur`.
+        let frost = if self.revealed {
+            self.blur()
+        } else {
+            Task::none()
+        };
+        Task::batch([frost, popup, load, focus, deadline])
     }
 
     /// Put a reload's data in place. Fields only: it returns no task, so it
@@ -794,19 +927,28 @@ impl App {
     /// window and `surface-message` surfaces — and a layer surface asked for
     /// with `get_layer_surface` is in neither, so nothing requests it for us.
     ///
-    /// Asked for twice: once in the batch that creates the surface, and again
-    /// when it takes the keyboard.
+    /// When it is asked for has moved twice, and both moves were about what
+    /// the frost sits behind.
     ///
-    /// The first is what frosts the menu from its first frame. A blur request
-    /// for an id with no surface yet is not dropped — libcosmic stashes it in
-    /// `pending_blur`, and `get_layer_surface` drains that and installs the
-    /// region before its own commit. Waiting for focus instead left the card
-    /// clear for the 160-500 ms until the focus event landed: the window
-    /// behind it was legible straight through, and the compositor's open
-    /// animation played over those frames.
+    /// It used to wait for the keyboard, which left the card clear for the
+    /// 160-500 ms until the focus event landed. So it moved into the batch
+    /// that creates the surface — a request for an id with no surface yet is
+    /// stashed in libcosmic's `pending_blur` and installed before the
+    /// surface's first commit — and the menu was frosted from its first
+    /// frame.
     ///
-    /// The second is a backstop for a cold start, where the creating request
-    /// is lost for two reasons that do not apply to any later open:
+    /// The fade moved it again. A new surface is now drawn empty until the
+    /// fade has hold of it, 70-380 ms, and frost asked for at creation showed
+    /// as an empty frosted pane for all of that. The frost cannot fade with
+    /// the content either: the compositor draws it at full strength as an
+    /// element of its own, outside the alpha multiplier. So it is asked for on
+    /// the first step that shows any content (`fade_step`), and appears with
+    /// it; at close it stays at full strength and goes with the surface.
+    /// Without a fade the creation-time request still applies, as before.
+    ///
+    /// It is asked for again when the surface takes the keyboard and when an
+    /// opening fade lands, as a backstop for a cold start, where a request is
+    /// lost for two reasons that do not apply to any later open:
     /// `ext_background_effect_manager` may not be bound yet on the process's
     /// very first surface, and `apply_blur` then logs "Blur effect is not
     /// supported." and drops the region; and the theme may not have loaded,
@@ -818,10 +960,14 @@ impl App {
     /// medium radius, so a whole-surface rectangle showed square blurred
     /// corners outside the arcs.
     fn blur(&self) -> Task<Message> {
+        match self.popup {
+            Some(id) => self.blur_for(id),
+            None => Task::none(),
+        }
+    }
+
+    fn blur_for(&self, id: Id) -> Task<Message> {
         let theme = self.core.system_theme();
-        let Some(id) = self.popup else {
-            return Task::none();
-        };
         if !self.core.frosted(theme.cosmic()) {
             return Task::none();
         }
@@ -833,22 +979,222 @@ impl App {
         .discard()
     }
 
+    /// Dismiss the menu: fade it out if the fade has hold of it, else take
+    /// it away at once.
+    ///
+    /// Whatever the route — Escape, a launch, a click away, a press — the
+    /// menu stops being the open menu here, and anything waiting on the close
+    /// (a launch) is not held up by the fade.
+    ///
+    /// The keyboard is given up here too, but cosmic-comp only moves focus
+    /// when the surface is destroyed: a layer surface that turns keyboard
+    /// interactivity off keeps the focus it has (no leave event arrives in
+    /// the 120 ms of the fade). So keys typed during the fade-out still reach
+    /// the fading surface, where `update` ignores them, and the window
+    /// underneath has the keyboard again when the fade ends.
     fn close_popup(&mut self) -> Task<Message> {
-        self.reset_popup_state();
         let Some(id) = self.popup.take() else {
             return Task::none();
         };
+        // Not "the menu now coming up" any more, so a press during the
+        // fade-out turns it round instead of counting as the tail of the
+        // press that opened it.
+        self.opened_at = None;
+        let animated =
+            self.revealed && matches!(&self.fader, FaderState::Ready(fader) if fader.attached());
+        if !animated {
+            return self.destroy_surface(id);
+        }
+        tracing::debug!("menu closing");
+        // From wherever it is now: a menu still fading in turns round.
+        let motion = match self.fade {
+            Some(fade) if fade.surface == id => fade.motion.reversed(),
+            _ => crate::motion::Motion::closing(),
+        };
+        self.closing = Some(id);
+        self.fade = Some(Fade {
+            surface: id,
+            motion,
+            // The clock keeps running: the first step out moves by a frame.
+            last: Some(std::time::Instant::now()),
+            offset: motion.frame().offset,
+            frosted: true,
+        });
+        // Its contents are left exactly as they are until it is gone — a
+        // search snapping back to the full list mid-fade was the giveaway —
+        // so `reset_popup_state` waits for `finish_close`.
+        Task::batch([crate::shortcut::drop_keyboard(id), self.fade_step(false)])
+    }
+
+    /// Destroy a surface, and clear everything that belonged to its opening.
+    ///
+    /// The surface goes; the process stays. A standalone menu used to exit a
+    /// moment after closing, which meant every open paid for a fresh process
+    /// — a visible lag, a first frame drawn with no apps in it, and a race
+    /// where a press landing on the dying copy did nothing. Resident, it
+    /// keeps serving toggles over its bus name and every open after the first
+    /// is instant. Nothing is left behind: the fade lets go first (its alpha
+    /// object must not outlive the surface), the state of the opening is
+    /// cleared, and the next open asks for a new surface id.
+    fn destroy_surface(&mut self, id: Id) -> Task<Message> {
         tracing::debug!("menu closed");
-        // The surface goes; the process stays. A standalone menu used to
-        // exit a moment after closing, which meant every open paid for a
-        // fresh process — a visible lag, a first frame drawn with no apps in
-        // it, and a race where a press landing on the dying copy did
-        // nothing. Resident, it keeps serving toggles over its bus name and
-        // every open after the first is instant. Nothing is left behind: the
-        // surface is destroyed, `reset_popup_state` has already cleared
-        // everything that belonged to this opening, and the next open asks
-        // for a new surface id.
+        if let FaderState::Ready(fader) = &mut self.fader {
+            fader.detach();
+        }
+        self.fade = None;
+        self.revealed = false;
+        self.reset_popup_state();
         cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface(id)
+    }
+
+    /// The fade-out has ended: the surface goes.
+    fn finish_close(&mut self) -> Task<Message> {
+        match self.closing.take() {
+            Some(id) => self.destroy_surface(id),
+            None => Task::none(),
+        }
+    }
+
+    /// A press while the menu fades out: the same surface comes back up from
+    /// where it is, with the keyboard. Destroying it and opening a new one
+    /// blinked — the old card vanished a frame before the new one began.
+    fn reverse_close(&mut self, id: Id) -> Task<Message> {
+        tracing::debug!("menu coming back");
+        self.popup = Some(id);
+        // A focus-loss check from before the close is not about this return.
+        self.focus_losses = self.focus_losses.wrapping_add(1);
+        if let Some(fade) = &mut self.fade {
+            fade.motion = fade.motion.reversed();
+        }
+        // It is on screen already, so a press may dismiss it again at once:
+        // no opening guard (`ignores_toggle`).
+        self.opened_at = None;
+        // Usually the surface never lost the keyboard (see `close_popup`), and
+        // goes straight back to on-demand, the open menu's steady state, so a
+        // click elsewhere still closes it. If the compositor did take it, the
+        // surface asks for it outright as a new one does, and the focus event
+        // hands it back to on-demand. Asking outright when no focus event is
+        // coming left the menu holding the keyboard for good: a click on a
+        // window then never closed it.
+        let keyboard = if self.had_focus {
+            crate::shortcut::release_keyboard(id)
+        } else {
+            crate::shortcut::grab_keyboard(id)
+        };
+        Task::batch([keyboard, self.focus_search()])
+    }
+
+    /// Show a hidden surface at once, at rest and without a fade: the fade
+    /// could not take hold of it.
+    fn reveal_now(&mut self, id: Id) -> Task<Message> {
+        tracing::debug!("menu shown without a fade");
+        self.revealed = true;
+        self.fade = None;
+        Task::batch([
+            crate::shortcut::slide(id, self.config.menu_position, 0),
+            self.blur_for(id),
+            self.focus_search(),
+        ])
+    }
+
+    /// Whether the open menu has been seen, for `ignores_toggle`: it has the
+    /// keyboard, and its opening fade has landed.
+    ///
+    /// The keyboard alone used to be the sign — focus took 160-500 ms to
+    /// arrive, by which time the menu was plainly on screen. A resident menu
+    /// takes the keyboard within a few milliseconds, while it is still
+    /// invisible under the fade, so a second press of a quick pair closed it
+    /// again mid-fade-in: a flash, then nothing, which is the very fault the
+    /// guard exists for. Until the fade lands, the press is the tail of the
+    /// one that opened it. `OPEN_GUARD` still bounds the wait.
+    fn seen(&self) -> bool {
+        self.had_focus && self.revealed && Fade::landed(self.fade)
+    }
+
+    /// Give the search box the keyboard, unless the highlight has it.
+    ///
+    /// Asked for again whenever the view switches from hidden to the real
+    /// menu: `open` and the first focus event both land while the surface is
+    /// still drawn empty, when there is no search box in it to focus, and the
+    /// menu then came up with a box that ignored typing.
+    fn focus_search(&self) -> Task<Message> {
+        if self.nav.is_none() {
+            text_input::focus(self.search_id.clone())
+        } else {
+            Task::none()
+        }
+    }
+
+    /// One step of the running animation. `tick` moves it on by the time
+    /// since the last step; without it the current frame is shown again,
+    /// which is how a fade is started and how a close kicks off its loop.
+    ///
+    /// The clock starts on the first frame callback after the content is
+    /// drawn, not when the fade takes hold: taking hold shows the surface at
+    /// nothing and switches the view to the real menu, and the frame that
+    /// draws that menu is the slow one. Each step is then capped at a frame
+    /// (`motion::MAX_STEP`), so a slow frame holds the motion back instead of
+    /// throwing it forward.
+    ///
+    /// Paced by the compositor: each step asks for a frame callback, and the
+    /// next step runs when it comes — or after `FRAME_FALLBACK`, whichever is
+    /// first, since a surface that is not being repainted gets no callbacks.
+    fn fade_step(&mut self, tick: bool) -> Task<Message> {
+        let Some(mut fade) = self.fade else {
+            return Task::none();
+        };
+        let frame = if tick {
+            let now = std::time::Instant::now();
+            let elapsed = fade.last.map_or(std::time::Duration::ZERO, |t| now - t);
+            fade.last = Some(now);
+            fade.motion.advance(elapsed)
+        } else {
+            fade.motion.frame()
+        };
+        let closing = fade.motion.phase() == crate::motion::Phase::Closing;
+        if frame.done && closing {
+            return self.finish_close();
+        }
+        self.fade_serial = self.fade_serial.wrapping_add(1);
+        let serial = self.fade_serial;
+        tracing::trace!(
+            serial,
+            opacity = frame.opacity,
+            offset = frame.offset,
+            "fade step"
+        );
+        if let FaderState::Ready(fader) = &mut self.fader {
+            fader.show(frame.opacity, serial);
+        }
+        let slide = if frame.offset == fade.offset {
+            Task::none()
+        } else {
+            fade.offset = frame.offset;
+            crate::shortcut::slide(fade.surface, self.config.menu_position, frame.offset)
+        };
+        // The frost arrives with the first content anyone can see. Asked
+        // for on the step that starts the clock, which still shows nothing:
+        // libcosmic installs the region without committing, so it reaches
+        // the screen with the next commit — the one that makes the content
+        // visible. Asked for on that step instead, it trailed by a frame and
+        // the first sight of the menu was its content over sharp background.
+        let frost = if tick && !fade.frosted {
+            fade.frosted = true;
+            self.blur_for(fade.surface)
+        } else {
+            Task::none()
+        };
+        if frame.done {
+            // Landed: solid, at rest, nothing left to step. Ask for the frost
+            // once more as the cold-start backstop.
+            self.fade = None;
+            return Task::batch([slide, frost, self.blur_for(fade.surface)]);
+        }
+        self.fade = Some(fade);
+        let fallback = Task::perform(tokio::time::sleep(FRAME_FALLBACK), move |()| {
+            cosmic::action::app(Message::FadeFrame(serial))
+        });
+        Task::batch([slide, frost, fallback])
     }
 
     /// Apply a change to the config: at once to the copy on screen, and to
@@ -1306,9 +1652,24 @@ impl Application for App {
     }
 
     fn init(core: Core, mode: Mode) -> (Self, Task<Message>) {
+        let mut core = core;
+        if matches!(mode, Mode::Shortcut { .. }) {
+            // libcosmic blurs every surface it does not track, as if it were
+            // the main window, the moment it opens — a whole-surface blur
+            // with square corners under the menu's rounded ones, before the
+            // menu's own shaped region is asked for. Popups only: the menu
+            // asks for its frost itself (see `blur`), and `frosted` still
+            // reads the theme because the set is not empty.
+            core.set_auto_blur(cosmic::core::Auto::Popup.into());
+        }
         let mut app = Self {
             core,
             mode,
+            fader: FaderState::Untried,
+            revealed: false,
+            closing: None,
+            fade: None,
+            fade_serial: 0,
             had_focus: false,
             focus_losses: 0,
             popup: None,
@@ -1373,11 +1734,19 @@ impl Application for App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // A surface fading out shows what it showed and does nothing else.
+        // It still gets input: cosmic-comp leaves the keyboard with a layer
+        // surface that gives up keyboard interactivity until the surface is
+        // destroyed, so the keys typed right after a close arrive here, and
+        // typing into its search box swapped the fading list for results.
+        if self.popup.is_none() && self.closing.is_some() && message.is_input() {
+            return Task::none();
+        }
         match message {
             Message::TogglePopup => {
                 tracing::debug!(
                     open = self.popup.is_some(),
-                    seen = self.had_focus,
+                    seen = self.seen(),
                     "toggle received"
                 );
                 // The panel button does not draw the menu itself: it asks the
@@ -1389,7 +1758,7 @@ impl Application for App {
                     crate::remote::spawn_menu();
                     return Task::none();
                 }
-                if ignores_toggle(self.opened_at, self.had_focus, std::time::Instant::now()) {
+                if ignores_toggle(self.opened_at, self.seen(), std::time::Instant::now()) {
                     return Task::none();
                 }
                 if self.popup.is_some() {
@@ -1399,9 +1768,85 @@ impl Application for App {
                     self.closed_by_focus = None;
                     return Task::none();
                 }
+                // After the reopen guard, so the click that dismissed the menu
+                // by taking the keyboard cannot bring it straight back.
+                if let Some(id) = self.closing.take() {
+                    return self.reverse_close(id);
+                }
                 self.open()
             }
-            Message::Focused => {
+            Message::SurfaceOpened(id) => {
+                if self.popup != Some(id) || self.revealed {
+                    return Task::none();
+                }
+                crate::fade::handles(id)
+                    .map(move |handles| cosmic::action::app(Message::FadeHandles(id, handles)))
+            }
+            Message::FadeHandles(id, handles) => {
+                if self.popup != Some(id) || self.revealed {
+                    return Task::none();
+                }
+                let Some(handles) = handles else {
+                    return self.reveal_now(id);
+                };
+                if matches!(self.fader, FaderState::Untried) {
+                    self.fader = match crate::fade::Fader::connect(handles) {
+                        Some(fader) => FaderState::Ready(Box::new(fader)),
+                        None => {
+                            tracing::info!(
+                                "no wp_alpha_modifier_v1: the menu opens without a fade"
+                            );
+                            FaderState::Unavailable
+                        }
+                    };
+                }
+                let attached = match &mut self.fader {
+                    FaderState::Ready(fader) => fader.attach(handles),
+                    _ => false,
+                };
+                if !attached {
+                    return self.reveal_now(id);
+                }
+                tracing::debug!(
+                    after = ?self.opened_at.map(|t| t.elapsed()),
+                    "the fade has hold of the menu"
+                );
+                // The view switches to the real menu now, drawn under an
+                // opacity of nothing.
+                self.revealed = true;
+                self.fade = Some(Fade {
+                    surface: id,
+                    motion: crate::motion::Motion::opening(),
+                    last: None,
+                    offset: crate::motion::SLIDE_PX,
+                    frosted: false,
+                });
+                Task::batch([self.fade_step(false), self.focus_search()])
+            }
+            Message::RevealDeadline(id) => {
+                if self.popup == Some(id) && !self.revealed {
+                    return self.reveal_now(id);
+                }
+                Task::none()
+            }
+            Message::FadeFrame(serial) => {
+                if serial != self.fade_serial {
+                    return Task::none();
+                }
+                self.fade_step(true)
+            }
+            Message::Focused(id) => {
+                tracing::debug!(?id, open = ?self.popup, "keyboard entered");
+                // A surface fading out keeps its focus state up to date, for a
+                // press that brings it back — but nothing else happens.
+                if self.closing == Some(id) {
+                    self.had_focus = true;
+                    return Task::none();
+                }
+                // A surface already gone.
+                if self.popup != Some(id) {
+                    return Task::none();
+                }
                 self.had_focus = true;
                 tracing::debug!("menu has the keyboard");
                 let focus = text_input::focus(self.search_id.clone());
@@ -1410,15 +1855,24 @@ impl Application for App {
                 // back, so a click on another window raised no `Unfocused` and
                 // the menu stayed open. Once focus is actually here, hand the
                 // keyboard back to on-demand so clicking away loses it.
-                match self.popup {
-                    Some(id) => {
-                        Task::batch([focus, crate::shortcut::release_keyboard(id), self.blur()])
-                    }
-                    None => focus,
-                }
+                //
+                // The frost is the cold-start backstop here, and only once the
+                // content shows: focus usually lands before the fade's first
+                // visible step, and frost then would sit on an empty pane.
+                let frost = if self.revealed && self.fade.is_none_or(|fade| fade.frosted) {
+                    self.blur()
+                } else {
+                    Task::none()
+                };
+                Task::batch([focus, crate::shortcut::release_keyboard(id), frost])
             }
-            Message::Unfocused => {
-                if !self.had_focus {
+            Message::Unfocused(id) => {
+                tracing::debug!(?id, open = ?self.popup, "keyboard left");
+                if self.closing == Some(id) {
+                    self.had_focus = false;
+                    return Task::none();
+                }
+                if self.popup != Some(id) || !self.had_focus {
                     return Task::none();
                 }
                 // Not closed at once: focus also leaves and comes straight
@@ -1444,18 +1898,33 @@ impl Application for App {
                 self.close_popup()
             }
             Message::PopupClosed(id) => {
+                // The compositor took the surface. The fade lets go of it
+                // first; if the surface is already destroyed it lets go
+                // without a word (see `fade::Fader::detach`).
                 if self.popup == Some(id) {
                     self.popup = None;
-                    self.reset_popup_state();
+                } else if self.closing == Some(id) {
+                    self.closing = None;
+                } else {
+                    return Task::none();
                 }
+                if let FaderState::Ready(fader) = &mut self.fader {
+                    fader.detach();
+                }
+                self.fade = None;
+                self.revealed = false;
+                self.reset_popup_state();
                 Task::none()
             }
             Message::Loaded(loaded) => {
                 let was_empty = self.apps.is_empty();
                 let generation = loaded.generation;
+                // A menu fading out is still on screen, and holds whatever it
+                // shows — even the empty first card — until it is gone.
+                let fading_out = self.closing.is_some();
                 match on_load(
-                    self.popup.is_some(),
-                    !was_empty,
+                    self.popup.is_some() || fading_out,
+                    !was_empty || fading_out,
                     generation,
                     self.load_newest,
                 ) {
@@ -1924,8 +2393,51 @@ impl Application for App {
                     .map(|reply| (Message::Launcher(reply), Some(receiver)))
             })
         });
-        let remote = Subscription::batch([remote, launcher]);
+        // The fade's frame callbacks, whenever a surface is animating —
+        // including one fading out after the menu has closed.
+        let frames = Subscription::run_with((), |()| {
+            futures::stream::unfold(crate::fade::frame_callbacks(), |frames| async move {
+                let mut receiver = frames?;
+                receiver
+                    .recv()
+                    .await
+                    .map(|serial| (Message::FadeFrame(serial), Some(receiver)))
+            })
+        });
+        let remote = Subscription::batch([remote, launcher, frames]);
+        // Focus is listened for while any surface exists, the fading one
+        // included: a press during the fade-out hands that surface the
+        // keyboard back, and a listener started only then could miss the
+        // focus arriving.
+        let focus = cosmic::iced::event::listen_with(|event, _status, id| match event {
+            cosmic::iced::Event::Window(window::Event::Focused) => Some(Message::Focused(id)),
+            cosmic::iced::Event::Window(window::Event::Unfocused) => Some(Message::Unfocused(id)),
+            // The surface exists now, so its handles can be read.
+            cosmic::iced::Event::Window(window::Event::Opened { .. }) => {
+                Some(Message::SurfaceOpened(id))
+            }
+            // A layer surface loses the keyboard as a Wayland event, not a
+            // window one: iced turns a keyboard leave into
+            // `window::Event::Unfocused` for ordinary windows only. Watching
+            // for the window event alone was why clicking another window
+            // never closed the menu, however long you waited.
+            cosmic::iced::Event::PlatformSpecific(
+                cosmic::iced::event::PlatformSpecific::Wayland(
+                    // The event names its own surface; trust that over the
+                    // window it was routed through.
+                    cosmic::iced::event::wayland::Event::Layer(layer, _, id),
+                ),
+            ) => match layer {
+                cosmic::iced::event::wayland::LayerEvent::Focused => Some(Message::Focused(id)),
+                cosmic::iced::event::wayland::LayerEvent::Unfocused => Some(Message::Unfocused(id)),
+                cosmic::iced::event::wayland::LayerEvent::Done => Some(Message::Unfocused(id)),
+            },
+            _ => None,
+        });
         if self.popup.is_none() {
+            if self.closing.is_some() {
+                return Subscription::batch([remote, focus]);
+            }
             return remote;
         }
         let keys = cosmic::iced::event::listen_with(|event, status, _id| match event {
@@ -1992,25 +2504,6 @@ impl Application for App {
             }
             _ => None,
         });
-        let focus = cosmic::iced::event::listen_with(|event, _status, _id| match event {
-            cosmic::iced::Event::Window(window::Event::Focused) => Some(Message::Focused),
-            cosmic::iced::Event::Window(window::Event::Unfocused) => Some(Message::Unfocused),
-            // A layer surface loses the keyboard as a Wayland event, not a
-            // window one: iced turns a keyboard leave into
-            // `window::Event::Unfocused` for ordinary windows only. Watching
-            // for the window event alone was why clicking another window
-            // never closed the menu, however long you waited.
-            cosmic::iced::Event::PlatformSpecific(
-                cosmic::iced::event::PlatformSpecific::Wayland(
-                    cosmic::iced::event::wayland::Event::Layer(layer, ..),
-                ),
-            ) => match layer {
-                cosmic::iced::event::wayland::LayerEvent::Focused => Some(Message::Focused),
-                cosmic::iced::event::wayland::LayerEvent::Unfocused => Some(Message::Unfocused),
-                cosmic::iced::event::wayland::LayerEvent::Done => Some(Message::Unfocused),
-            },
-            _ => None,
-        });
         Subscription::batch([remote, keys, focus])
     }
 
@@ -2024,7 +2517,16 @@ impl Application for App {
             .into()
     }
 
-    fn view_window(&self, _id: Id) -> Element<'_, Message> {
+    fn view_window(&self, id: Id) -> Element<'_, Message> {
+        // Nothing at all until the fade has hold of the surface: a frame drawn
+        // before then could not be hidden, and the very first frame of a new
+        // surface sometimes came out sheared besides.
+        if self.popup == Some(id) && !self.revealed {
+            return cosmic::widget::Space::new()
+                .width(Length::Fixed(self.width()))
+                .height(Length::Fixed(POPUP_HEIGHT))
+                .into();
+        }
         // The first open of a fresh process has no apps yet: the load runs
         // off-thread and lands a moment later. Drawing the real layout now
         // would show every tile group as an "empty group" caption over a
@@ -2297,6 +2799,38 @@ mod tests {
             }),
             Escape::LeaveEdit
         );
+    }
+
+    #[test]
+    fn a_fading_menu_ignores_input_but_not_its_own_machinery() {
+        // What a key, a click or a scroll on the fading surface sends.
+        for input in [
+            Message::Query("fi".into()),
+            Message::Submit,
+            Message::KeyPress(Key::Down),
+            Message::Letter('f'),
+            Message::Launch(0),
+            Message::LaunchId("firefox.desktop".into()),
+            Message::ToggleFolder(0),
+            Message::ListScrolled {
+                offset: 0.0,
+                view: 100.0,
+            },
+        ] {
+            assert!(input.is_input(), "{input:?}");
+        }
+        // What drives the fade itself, and the press that turns it round.
+        for machinery in [
+            Message::TogglePopup,
+            Message::FadeFrame(3),
+            Message::RevealDeadline(Id::RESERVED),
+            Message::Focused(Id::RESERVED),
+            Message::Unfocused(Id::RESERVED),
+            Message::PopupClosed(Id::RESERVED),
+            Message::FocusGone(1),
+        ] {
+            assert!(!machinery.is_input(), "{machinery:?}");
+        }
     }
 
     #[test]
