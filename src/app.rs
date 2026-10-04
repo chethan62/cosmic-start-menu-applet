@@ -332,6 +332,20 @@ pub struct App {
     /// before the fade can hide it — and never seen at all when it comes out
     /// sheared, as the first frame at a fractional scale sometimes did.
     revealed: bool,
+    /// When the animation clock started for the current open: the menu's
+    /// reveal moment. `None` while the menu is closed, so the state machine
+    /// in `tilemotion` holds every tile on frame 0.
+    anim_start: Option<std::time::Instant>,
+    /// The tile the pointer is over, if any — used only by `OnHighlight` to
+    /// pick its own clock. Separate from the keyboard highlight because a
+    /// tile can be hovered without being focused.
+    hover: Option<TileRef>,
+    /// When the tile in `hover`-or-focus became highlighted, so an
+    /// `OnHighlight` motion plays from frame 0 each time it comes alive.
+    highlight_since: Option<std::time::Instant>,
+    /// Which tile the above `highlight_since` is for: used to tell whether a
+    /// Focused/Hover change needs a fresh start.
+    highlight_of: Option<TileRef>,
     /// A surface fading out after a close. The menu counts as closed while it
     /// fades — a press turns the fade round instead of opening a second
     /// surface — and the surface is destroyed when the fade ends.
@@ -548,6 +562,14 @@ pub enum Message {
     TileColor(TileRef, Option<String>),
     /// Take the picture off a tile.
     ClearTileImage(TileRef),
+    /// Choose how a tile's GIF plays.
+    SetTileMotion(TileRef, crate::tilemotion::Motion),
+    /// Whether a tile with a picture also draws its app icon.
+    SetTileIconOverImage(TileRef, bool),
+    /// The pointer entered or left a tile — tracked to drive OnHighlight GIFs.
+    TileHover(Option<TileRef>),
+    /// Advance animated-GIF tiles.
+    AnimTick,
     /// Ctrl+1..9: launch the n'th pinned tile.
     TileNumber(usize),
     PopupClosed(Id),
@@ -1068,6 +1090,10 @@ impl App {
         }
         self.fade = None;
         self.revealed = false;
+        self.anim_start = None;
+        self.hover = None;
+        self.highlight_since = None;
+        self.highlight_of = None;
         self.reset_popup_state();
         cosmic::iced::platform_specific::shell::commands::layer_surface::destroy_layer_surface(id)
     }
@@ -1114,6 +1140,7 @@ impl App {
     fn reveal_now(&mut self, id: Id) -> Task<Message> {
         tracing::debug!("menu shown without a fade");
         self.revealed = true;
+        self.anim_start = Some(std::time::Instant::now());
         self.fade = None;
         Task::batch([
             crate::shortcut::slide(id, self.config.menu_position, 0),
@@ -1428,6 +1455,49 @@ impl App {
         self.nav.filter(|s| s.zone == zone).map(|s| s.index)
     }
 
+    /// The tile currently highlighted (pointer or keyboard), if any. The
+    /// keyboard wins when both land on different tiles, since arrowing
+    /// through the grid should keep its own GIF playing even if the pointer
+    /// is still parked somewhere else.
+    fn highlighted_tile(&self) -> Option<TileRef> {
+        self.focused_tile().or(self.hover)
+    }
+
+    /// Which tile the keyboard highlight is on, if the keyboard is in the
+    /// tile zone.
+    fn focused_tile(&self) -> Option<TileRef> {
+        self.focus_in(Zone::Tiles)
+            .and_then(|n| self.tile_stops().0.get(n).copied())
+    }
+
+    /// A hover/focus change updates when the OnHighlight clock started, so
+    /// each highlight plays its GIF from the first frame.
+    fn refresh_highlight_clock(&mut self) {
+        let now = self.highlighted_tile();
+        if now != self.highlight_of {
+            self.highlight_of = now;
+            self.highlight_since = now.map(|_| std::time::Instant::now());
+        }
+    }
+
+    /// How long the animation clock for `(g, t)` has been running under
+    /// `motion`, or zero if it is not animating now.
+    fn tile_elapsed(&self, at: TileRef, motion: crate::tilemotion::Motion) -> std::time::Duration {
+        use crate::tilemotion::Motion;
+        match motion {
+            Motion::Loop | Motion::Once => self.anim_start.map(|t| t.elapsed()).unwrap_or_default(),
+            Motion::OnHighlight => {
+                if self.highlight_of == Some(at) {
+                    self.highlight_since
+                        .map(|t| t.elapsed())
+                        .unwrap_or_default()
+                } else {
+                    std::time::Duration::ZERO
+                }
+            }
+        }
+    }
+
     /// Take the keyboard off the search box. iced's focus operation unfocuses
     /// every focusable it is not aiming at, so aiming it at an id no widget
     /// carries is how an input is blurred — otherwise a plain letter would
@@ -1442,6 +1512,7 @@ impl App {
     fn set_nav(&mut self, spot: Option<keynav::Spot>) -> Task<Message> {
         let had = self.nav.is_some();
         self.nav = spot;
+        self.refresh_highlight_clock();
         match (had, self.nav.is_some()) {
             (false, true) => Task::batch([Self::blur_search(), self.reveal_nav()]),
             (true, false) => text_input::focus(self.search_id.clone()),
@@ -1692,6 +1763,10 @@ impl Application for App {
             mode,
             fader: FaderState::Untried,
             revealed: false,
+            anim_start: None,
+            hover: None,
+            highlight_since: None,
+            highlight_of: None,
             closing: None,
             fade: None,
             fade_serial: 0,
@@ -1837,8 +1912,11 @@ impl Application for App {
                     "the fade has hold of the menu"
                 );
                 // The view switches to the real menu now, drawn under an
-                // opacity of nothing.
+                // opacity of nothing. Animations start their clock from this
+                // instant — a GIF on `Once` plays through once per open from
+                // the moment the user can see it.
                 self.revealed = true;
+                self.anim_start = Some(std::time::Instant::now());
                 self.fade = Some(Fade {
                     surface: id,
                     motion: crate::motion::Motion::opening(),
@@ -2255,6 +2333,18 @@ impl Application for App {
                 self.edit(move |c| c.set_tile_color(at, color.clone()))
             }
             Message::ClearTileImage(at) => self.edit(move |c| c.set_tile_image(at, "")),
+            Message::SetTileMotion(at, motion) => self.edit(move |c| c.set_tile_motion(at, motion)),
+            Message::SetTileIconOverImage(at, on) => {
+                self.edit(move |c| c.set_tile_icon_over_image(at, on))
+            }
+            Message::TileHover(at) => {
+                if self.hover != at {
+                    self.hover = at;
+                    self.refresh_highlight_clock();
+                }
+                Task::none()
+            }
+            Message::AnimTick => Task::none(),
             Message::TileNumber(n) => {
                 let installed: std::collections::HashSet<&str> =
                     self.apps.iter().map(|a| a.id.as_str()).collect();
@@ -2465,6 +2555,14 @@ impl Application for App {
             }
             return remote;
         }
+        // While the menu is on screen, tick at ~30Hz so animated tiles redraw.
+        // Any message is enough — iced re-runs `view`, which picks the current
+        // GIF frame from `tile_elapsed`. `tilemotion::is_animating` keeps still
+        // tiles from redrawing beyond what iced already dedupes. We let the
+        // tick run unconditionally while the popup is up: a sleeping tile
+        // produces the same Handle each frame, so view diffs it to nothing.
+        let anim = cosmic::iced::time::every(std::time::Duration::from_millis(33))
+            .map(|_| Message::AnimTick);
         let keys = cosmic::iced::event::listen_with(|event, status, _id| match event {
             cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
                 key: KeyCode::Named(named),
@@ -2529,7 +2627,7 @@ impl Application for App {
             }
             _ => None,
         });
-        Subscription::batch([remote, keys, focus])
+        Subscription::batch([remote, keys, focus, anim])
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -2634,20 +2732,25 @@ impl Application for App {
                 ])
                 .spacing(spacing.section)
                 .into(),
-                ui::tiles::view(ui::tiles::RightView {
-                    config: &self.config,
-                    apps: &self.apps,
-                    spacing,
-                    edit: self.edit,
-                    favs: &self.favs,
-                    recent: &self.recent,
-                    menu_open: self.right_menu,
-                    renaming: self.renaming.as_ref(),
-                    focus: self
-                        .focus_in(Zone::Tiles)
-                        .and_then(|n| self.tile_stops().0.get(n).copied()),
-                    radius: ui::tile_radius(self.core.system_theme()),
-                }),
+                ui::tiles::view(
+                    ui::tiles::RightView {
+                        config: &self.config,
+                        apps: &self.apps,
+                        spacing,
+                        edit: self.edit,
+                        favs: &self.favs,
+                        recent: &self.recent,
+                        menu_open: self.right_menu,
+                        renaming: self.renaming.as_ref(),
+                        focus: self
+                            .focus_in(Zone::Tiles)
+                            .and_then(|n| self.tile_stops().0.get(n).copied()),
+                        radius: ui::tile_radius(self.core.system_theme()),
+                        menu_visible: self.revealed && self.closing.is_none(),
+                        hover: self.hover,
+                    },
+                    |at, motion| self.tile_elapsed(at, motion),
+                ),
             ])
             .spacing(COLUMN_GAP)
             .into()

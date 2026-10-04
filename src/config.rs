@@ -196,6 +196,14 @@ pub struct Tile {
     /// Live-tile content source. Reserved for v2: parsed and preserved, never drawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// How the picture plays when it is a GIF. Still pictures ignore this.
+    #[serde(default, skip_serializing_if = "crate::tilemotion::Motion::is_default")]
+    pub motion: crate::tilemotion::Motion,
+    /// Whether the app's icon is drawn over the picture. Default false: the
+    /// picture speaks for itself; a tile that wants both switches this on.
+    /// Tiles without a picture are unaffected — the icon always shows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub icon_over_image: bool,
 }
 
 impl Tile {
@@ -208,6 +216,8 @@ impl Tile {
             color: None,
             image: None,
             source: None,
+            motion: crate::tilemotion::Motion::default(),
+            icon_over_image: false,
         }
     }
 }
@@ -294,6 +304,9 @@ const HEADER: &str = "\
 # over `finish`. `show_tile_names` hides tile captions when false.
 # `tile_colors_from_icon` fills a tile with its icon's brand colour unless
 # the tile sets its own `color` or `image`; off falls back to `finish`.
+# `motion` plays a GIF tile: loop (default) | once | on_highlight. A still
+# picture ignores it. `icon_over_image` draws the app icon over the picture
+# (default off); unused when no picture is set.
 ";
 
 /// The dock's favourites file is a RON list of strings. Pull the quoted
@@ -489,6 +502,20 @@ impl Config {
         if let Some(tile) = self.tile_mut(at) {
             let path = path.trim();
             tile.image = (!path.is_empty()).then(|| path.to_owned());
+        }
+    }
+
+    /// Set a tile's GIF motion.
+    pub fn set_tile_motion(&mut self, at: TileRef, motion: crate::tilemotion::Motion) {
+        if let Some(tile) = self.tile_mut(at) {
+            tile.motion = motion;
+        }
+    }
+
+    /// Whether to draw the app icon over the tile's picture.
+    pub fn set_tile_icon_over_image(&mut self, at: TileRef, on: bool) {
+        if let Some(tile) = self.tile_mut(at) {
+            tile.icon_over_image = on;
         }
     }
 

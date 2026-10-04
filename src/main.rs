@@ -7,6 +7,7 @@ mod config;
 mod fade;
 mod favorites;
 mod folders;
+mod gif;
 mod i18n;
 mod instance;
 mod keynav;
@@ -22,6 +23,7 @@ mod shortcut;
 mod single_instance;
 mod tile_layout;
 mod tileimage;
+mod tilemotion;
 mod ui;
 mod usage;
 

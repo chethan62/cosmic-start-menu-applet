@@ -202,6 +202,26 @@ pub fn view<'a>(
                     fl!("ctx-image-remove"),
                     Message::ClearTileImage((g, t)),
                 ));
+                items.push(label(fl!("ctx-image-motion")));
+                for (motion, key) in [
+                    (crate::tilemotion::Motion::Loop, "motion-loop"),
+                    (crate::tilemotion::Motion::Once, "motion-once"),
+                    (
+                        crate::tilemotion::Motion::OnHighlight,
+                        "motion-on-highlight",
+                    ),
+                ] {
+                    items.push(checked(
+                        fl!(key),
+                        tile.motion == motion,
+                        Message::SetTileMotion((g, t), motion),
+                    ));
+                }
+                items.push(checked(
+                    fl!("ctx-icon-over-image"),
+                    tile.icon_over_image,
+                    Message::SetTileIconOverImage((g, t), !tile.icon_over_image),
+                ));
             }
             items.push(divider::horizontal::light().into());
             items.push(label(fl!("ctx-resize")));

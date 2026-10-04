@@ -62,13 +62,28 @@ fn build(key: &Key) -> Option<Handle> {
     let mut rgba = img
         .resize_to_fill(key.w, key.h, image::imageops::FilterType::Lanczos3)
         .to_rgba8();
-    let (w, h) = (key.w as f32, key.h as f32);
-    let r = (key.radius as f32).min(w / 2.0).min(h / 2.0);
-    for (x, y, px) in rgba.enumerate_pixels_mut() {
-        let cover = coverage(x as f32 + 0.5, y as f32 + 0.5, w, h, r);
-        px.0[3] = (f32::from(px.0[3]) * cover).round() as u8;
-    }
+    apply_mask(rgba.as_mut(), key.w, key.h, key.radius as f32);
     Some(Handle::from_rgba(key.w, key.h, rgba.into_raw()))
+}
+
+/// Punch the tile's rounded corners into an existing straight RGBA buffer, in
+/// place: the GIF path uses this on every decoded frame so a moving picture
+/// shares the still path's exact edge treatment, including the one-pixel
+/// anti-aliased arc.
+///
+/// `rgba` is a `w * h * 4` run of straight (non-premultiplied) RGBA bytes.
+pub fn apply_mask(rgba: &mut [u8], w: u32, h: u32, radius: f32) {
+    let (wf, hf) = (w as f32, h as f32);
+    let r = radius.min(wf / 2.0).min(hf / 2.0);
+    for y in 0..h {
+        for x in 0..w {
+            let cover = coverage(x as f32 + 0.5, y as f32 + 0.5, wf, hf, r);
+            let i = (y * w + x) as usize * 4 + 3;
+            if let Some(a) = rgba.get_mut(i) {
+                *a = (f32::from(*a) * cover).round() as u8;
+            }
+        }
+    }
 }
 
 /// How much of the pixel centred at `(px, py)` lies inside a `w`x`h`

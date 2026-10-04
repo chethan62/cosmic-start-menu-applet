@@ -91,6 +91,22 @@ struct TileArgs<'a> {
     radius: f32,
     /// Whether auto brand fills are on.
     from_icon: bool,
+    /// The decoded animated GIF, if the tile's picture is one. One-frame
+    /// animations are drawn through the still path instead.
+    animation: Option<std::sync::Arc<crate::gif::Animation>>,
+    /// How the GIF plays — only read when `animation` is set.
+    motion: crate::tilemotion::Motion,
+    /// Whether the menu is open and visible: GIFs only animate then.
+    visible: bool,
+    /// Whether this tile is highlighted — pointer or keyboard — for
+    /// `Motion::OnHighlight` and for the pure helper's context.
+    highlighted: bool,
+    /// How long this tile's animation clock has been running, from
+    /// `App::tile_elapsed`. Zero means draw the first frame.
+    anim_elapsed: std::time::Duration,
+    /// Whether to draw the app icon over a tile that has a picture. A tile
+    /// without a picture always shows its icon.
+    icon_over_image: bool,
     /// Whether Medium and Wide tiles draw their name.
     show_name: bool,
     edit: Edit,
@@ -98,6 +114,15 @@ struct TileArgs<'a> {
     renaming: Option<(TileField, &'a str)>,
     /// Whether the keyboard highlight is on this tile.
     focus: bool,
+}
+
+/// Whether a tile with the given state draws its app icon over its background.
+///
+/// A tile with no picture always shows its icon; a tile with a picture shows
+/// it only when the user has turned it on. This is the pure rule — the UI
+/// mirrors it.
+pub fn icon_visible(has_image: bool, icon_over_image: bool) -> bool {
+    !has_image || icon_over_image
 }
 
 /// Which source paints a tile, in precedence order: a picture wins over
@@ -139,15 +164,34 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
         brand,
         radius,
         from_icon,
+        animation,
+        motion,
+        visible,
+        highlighted,
+        anim_elapsed,
+        icon_over_image,
         show_name,
         edit,
         renaming,
         focus,
     } = args;
-    let glyph = icon(app.icon.as_cosmic_icon()).size(match size {
-        TileSize::Small => ICON_SMALL,
-        TileSize::Medium | TileSize::Wide => ICON_LARGE,
-    });
+    let has_image = image.is_some();
+    let show_icon = icon_visible(has_image, icon_over_image);
+    let glyph: Element<'a, Message> = if show_icon {
+        icon(app.icon.as_cosmic_icon())
+            .size(match size {
+                TileSize::Small => ICON_SMALL,
+                TileSize::Medium | TileSize::Wide => ICON_LARGE,
+            })
+            .into()
+    } else {
+        // Still occupies the same slot, so the name below sits where it did
+        // before — swapping to a Space keeps spacing stable.
+        Space::new()
+            .width(Length::Fixed(0.0))
+            .height(Length::Fixed(0.0))
+            .into()
+    };
     // Mid-edit the tile is the input, whatever its size.
     if let Some((field, draft)) = renaming {
         let placeholder = match field {
@@ -163,27 +207,32 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
             .width(Length::Fixed(w))
             .into();
     }
-    let content: Element<'a, Message> = match size {
-        TileSize::Small => container(glyph).center(Length::Fill).into(),
-        // Name along the bottom edge, icon centred above it, as Windows does.
-        TileSize::Medium | TileSize::Wide if show_name => column::with_children(vec![
-            container(glyph)
-                .center_x(Length::Fill)
-                .padding([TILE_TOP, 0, 0, 0])
+    let content: Element<'a, Message> = if !show_icon && !show_name {
+        // The picture is the whole tile.
+        Space::new().width(Length::Fill).height(Length::Fill).into()
+    } else {
+        match size {
+            TileSize::Small => container(glyph).center(Length::Fill).into(),
+            // Name along the bottom edge, icon centred above it, as Windows does.
+            TileSize::Medium | TileSize::Wide if show_name => column::with_children(vec![
+                container(glyph)
+                    .center_x(Length::Fill)
+                    .padding([TILE_TOP, 0, 0, 0])
+                    .into(),
+                Space::new().height(Length::Fill).into(),
+                container(
+                    text::caption(name)
+                        .font(cosmic::font::semibold())
+                        .wrapping(cosmic::iced::widget::text::Wrapping::None),
+                )
+                .padding([0, TILE_INSET, TILE_INSET, TILE_INSET])
+                .width(Length::Fill)
                 .into(),
-            Space::new().height(Length::Fill).into(),
-            container(
-                text::caption(name)
-                    .font(cosmic::font::semibold())
-                    .wrapping(cosmic::iced::widget::text::Wrapping::None),
-            )
-            .padding([0, TILE_INSET, TILE_INSET, TILE_INSET])
-            .width(Length::Fill)
+            ])
+            .align_x(Alignment::Start)
             .into(),
-        ])
-        .align_x(Alignment::Start)
-        .into(),
-        TileSize::Medium | TileSize::Wide => container(glyph).center(Length::Fill).into(),
+            TileSize::Medium | TileSize::Wide => container(glyph).center(Length::Fill).into(),
+        }
     };
     let fill = tile_fill(image.is_some(), color.is_some(), brand.is_some(), from_icon);
     let class = if edit.picked == Some(at) || focus {
@@ -220,10 +269,27 @@ fn tile<'a>(args: TileArgs<'a>) -> Element<'a, Message> {
     // The picture sits in a layer under the button, masked to the tile's
     // rounded corners: a rectangular `clip` left its square corners poking
     // past the radius. A decode failure falls back to the raw path, which at
-    // least shows something rather than an empty tile.
+    // least shows something rather than an empty tile. An animated GIF picks
+    // its current frame off the cached decode; the still path is the
+    // fallback when a GIF decode fails or the file is a static picture.
     let button: Element<'a, Message> = match image {
         Some(path) => {
-            let handle = crate::tileimage::masked(path, w, h, radius)
+            let handle = animation
+                .as_deref()
+                .and_then(|a| {
+                    let frame = crate::tilemotion::frame(
+                        motion,
+                        crate::tilemotion::Context {
+                            menu_open: visible,
+                            highlighted,
+                        },
+                        a.frames.len(),
+                        &a.delays,
+                        anim_elapsed,
+                    );
+                    a.frames.get(frame).cloned()
+                })
+                .or_else(|| crate::tileimage::masked(path, w, h, radius))
                 .unwrap_or_else(|| cosmic::widget::image::Handle::from_path(path));
             let picture = cosmic::widget::image(handle)
                 .content_fit(cosmic::iced::ContentFit::Cover)
@@ -301,6 +367,10 @@ pub struct RightView<'a> {
     pub focus: Option<TileRef>,
     /// The theme's tile radius, for masking tile pictures to it.
     pub radius: f32,
+    /// Whether the menu is on screen for the user: GIFs animate only then.
+    pub menu_visible: bool,
+    /// The tile the pointer is currently over, if any.
+    pub hover: Option<TileRef>,
 }
 
 fn side_key(side: RightSide) -> &'static str {
@@ -423,7 +493,14 @@ pub fn keyboard_tiles(config: &Config, apps: &[App]) -> (Vec<TileRef>, Vec<Vec<T
     (refs, groups)
 }
 
-pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
+/// `elapsed_for` is called once per tile during view construction to
+/// compute each `anim_elapsed`; it is NOT held across the returned
+/// Element, so it keeps its own short lifetime and does not have to live
+/// as long as the view's `'a` borrows.
+pub fn view<'a>(
+    v: RightView<'a>,
+    elapsed_for: impl Fn(TileRef, crate::tilemotion::Motion) -> std::time::Duration,
+) -> Element<'a, Message> {
     let RightView {
         config,
         apps,
@@ -435,6 +512,8 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
         renaming,
         focus,
         radius,
+        menu_visible,
+        hover,
     } = v;
     let cells = config.tile_cells();
     let width = Length::Fixed(column_width(spacing, cells));
@@ -483,33 +562,70 @@ pub fn view<'a>(v: RightView<'a>) -> Element<'a, Message> {
                 .image
                 .as_deref()
                 .filter(|p| std::path::Path::new(p).is_file());
+            let is_focus = focus == Some((g, *ti));
+            let is_hover = hover == Some((g, *ti));
+            let highlighted = is_focus || is_hover;
+            // A GIF is decoded once per path+size+radius (gif::load caches),
+            // and only if the file is really a GIF — stills skip this and go
+            // through tileimage::masked.
+            let animation = picture
+                .filter(|p| {
+                    std::fs::read(p)
+                        .ok()
+                        .is_some_and(|data| crate::gif::is_gif(&data))
+                })
+                .and_then(|p| {
+                    crate::gif::load(
+                        p,
+                        dims.0.round().max(1.0) as u32,
+                        dims.1.round().max(1.0) as u32,
+                        radius,
+                    )
+                })
+                .filter(|a| a.frames.len() > 1);
+            let anim_elapsed = animation
+                .as_ref()
+                .map(|_| elapsed_for((g, *ti), t.motion))
+                .unwrap_or_default();
+            let at_ref = (g, *ti);
+            let app_id = app.id.clone();
+            let tile_el = pin(tile(TileArgs {
+                at: at_ref,
+                app,
+                name,
+                size: t.size,
+                dims,
+                finish: config.finish,
+                color: t.color.as_deref().and_then(parse_hex),
+                image: picture,
+                brand: config
+                    .tile_colors_from_icon
+                    .then(|| {
+                        app.brand
+                            .map(|[r, g, b]| cosmic::iced::Color::from_rgb8(r, g, b))
+                    })
+                    .flatten(),
+                radius,
+                from_icon: config.tile_colors_from_icon,
+                animation,
+                motion: t.motion,
+                visible: menu_visible,
+                highlighted,
+                anim_elapsed,
+                icon_over_image: t.icon_over_image,
+                show_name: config.show_tile_names,
+                edit,
+                renaming: draft,
+                focus: is_focus,
+            }))
+            .x(at.0)
+            .y(at.1);
+            let _ = app_id;
             layer.push(
-                pin(tile(TileArgs {
-                    at: (g, *ti),
-                    app,
-                    name,
-                    size: t.size,
-                    dims,
-                    finish: config.finish,
-                    color: t.color.as_deref().and_then(parse_hex),
-                    image: picture,
-                    brand: config
-                        .tile_colors_from_icon
-                        .then(|| {
-                            app.brand
-                                .map(|[r, g, b]| cosmic::iced::Color::from_rgb8(r, g, b))
-                        })
-                        .flatten(),
-                    radius,
-                    from_icon: config.tile_colors_from_icon,
-                    show_name: config.show_tile_names,
-                    edit,
-                    renaming: draft,
-                    focus: focus == Some((g, *ti)),
-                }))
-                .x(at.0)
-                .y(at.1)
-                .into(),
+                mouse_area(tile_el)
+                    .on_enter(Message::TileHover(Some(at_ref)))
+                    .on_exit(Message::TileHover(None))
+                    .into(),
             );
         }
         groups = groups.push(heading(g, &group.name, spacing, edit));
